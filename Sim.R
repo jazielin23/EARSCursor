@@ -11,7 +11,14 @@ SurveyData_new <- dkuReadDataset("FY24_prepared")
 
 n_runs <- 10
 num_cores <- 5
-future::plan(future::multisession, workers = num_cores)
+# Prefer forked workers on Linux to avoid exporting huge globals (e.g. SurveyData_new)
+if (future::supportsMulticore()) {
+  future::plan(future::multicore, workers = num_cores)
+} else {
+  # Fallback (may export globals); raise cap to avoid immediate failure
+  options(future.globals.maxSize = max(getOption("future.globals.maxSize", 0), 2 * 1024^3))
+  future::plan(future::multisession, workers = num_cores)
+}
 
 
 # Reading in data and setting initial parameters for loop over each quarter
