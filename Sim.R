@@ -678,23 +678,6 @@ jorja<-c(jorja,sub(".*_","",unlist(strsplit(unlist(strsplit(unlist(strsplit(meta
 
    }
 jorja <- jorja[metadata$Type== "Ride"]
-jorja
-
-Ride_Against20<-c()
-for(i in 1: length(jorja)){
-
-    SurveyData22[,noquote(jorja[i])]<- SurveyData22[,paste(jorja[i],"3",sep="")]
-
-}
-
-Ride_Against20<-setNames(aggregate(SurveyData22[,noquote(jorja)], by=list(Park=SurveyData22$park,LifeStage = SurveyData22$newgroup, QTR=SurveyData22$fiscal_quarter), FUN=sum), c("Park","LifeStage", "QTR",noquote(jorja)))
-
-jorja<-c()
-for(ii in 1:length(metadata[,2])){
-jorja<-c(jorja,sub(".*_","",unlist(strsplit(unlist(strsplit(unlist(strsplit(metadata[ii,2], split=c( 'ridesexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'charexp_'), fixed=TRUE))[1]))
-
-   }
-jorja <- jorja[metadata$Type== "Ride"]
 
 Ride_Against20<-c()
 for(i in 1: length(jorja)){
@@ -738,8 +721,6 @@ Show_Runsx[Show_Runsx$Park!=1,-c(1:3)]<-0
 Show_Runs20<-data.frame(Show_Runs20,Show_Runsx1)
 
 }
-
-Show_Runs20
 
 jorja<-c()
 for(ii in 1:length(metadata[,2])){
@@ -821,7 +802,6 @@ Show_Againstx[Show_Againstx$Park!=1,-c(1:3)]<-0
 Show_Against20<-data.frame(Show_Against20,Show_Againstx1)
 
 }
-Show_Against20
 
 Play_Againstx<-c()
 Play_Against20<-Ride_Runs20[,1:3]
@@ -852,7 +832,6 @@ Play_Againstx[Play_Againstx$Park!=1,-c(1:3)]<-0
 Play_Against20<-data.frame(Play_Against20,Play_Againstx1)
 
 }
-Play_Against20
 
 Show_Runsx<-c()
 length(unique(metadata$Category1[metadata$Type == "Show" & metadata$Park ==2 ]))
@@ -884,7 +863,6 @@ Show_Runsx[Show_Runsx$Park!=2,-c(1:3)]<-0
 Show_Runs20<-data.frame(Show_Runs20,Show_Runsx1)
 
 }
-Show_Runs20
 
 Play_Runsx<-c()
 Play_Runs20<-Ride_Runs20[,1:3]
@@ -917,7 +895,6 @@ Play_Runsx[Play_Runsx$Park!=1,-c(1:3)]<-0
     Play_Runs20<-data.frame(Play_Runs20,Play_Runsx1)
 
 }
-Play_Runs20
 
 Show_Againstx<-c()
 
@@ -948,7 +925,6 @@ Show_Againstx[Show_Againstx$Park!=2,-c(1:3)]<-0
 Show_Against20<-data.frame(Show_Against20,Show_Againstx1)
 
 }
-Show_Against20
 
 Play_Runsx<-c()
 
@@ -1042,7 +1018,6 @@ Show_Runsx[Show_Runsx$Park!=3,-c(1:3)]<-0
 Show_Runs20<-data.frame(Show_Runs20,Show_Runsx1)
 
 }
-Show_Runs20
 
 Show_Againstx<-c()
 
@@ -1198,8 +1173,6 @@ Show_Againstx[Show_Againstx$Park!=4,-c(1:3)]<-0
 Show_Against20<-data.frame(Show_Against20,Show_Againstx1)
 
 }
-Show_Runs20
-Show_Against20
 
 Play_Runsx<-c()
 
@@ -1261,7 +1234,6 @@ Play_Againstx[Play_Againstx$Park!=4,-c(1:3)]<-0
 Play_Against20<-data.frame(Play_Against20,Play_Againstx1)
 
 }
-Play_Against20
 
 
 ############################################################################################
