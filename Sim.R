@@ -9,8 +9,18 @@ SurveyDataCheck_new <- dkuReadDataset("FY24_prepared")
 POG_new <- dkuReadDataset("Charcter_Entertainment_POG")
 SurveyData_new <- dkuReadDataset("FY24_prepared")
 
-n_runs <- 10
-num_cores <- 5
+# Allow caller (e.g. Shiny) to override parameters before sourcing this file
+if (!exists("n_runs", inherits = FALSE)) n_runs <- 10
+if (!exists("num_cores", inherits = FALSE)) num_cores <- 5
+if (!exists("yearauto", inherits = FALSE)) yearauto <- 2024
+if (!exists("park_for_sim", inherits = FALSE)) park_for_sim <- 1
+if (!exists("exp_name", inherits = FALSE)) exp_name <- c("tron")
+if (!exists("exp_date_ranges", inherits = FALSE)) {
+  exp_date_ranges <- list(tron = c("2023-10-11", "2025-09-02"))
+}
+if (!exists("maxFQ", inherits = FALSE)) maxFQ <- 4
+if (!exists("verbose", inherits = FALSE)) verbose <- FALSE
+
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
@@ -20,13 +30,12 @@ SurveyData <- SurveyData_new
 replacementsave<-c()
 library(nnet)
 library(gtools)
-verbose <- FALSE
 maxFQ<-max(SurveyData$fiscal_quarter)
 minFQ<-min(SurveyData$fiscal_quarter)
 SurveyCheckFinal<-c()
 CountCheckFinal<-c()
 
-maxFQ<-4
+maxFQ<-maxFQ
 
 # Parallel loop
 EARSTotal_list <- foreach(
@@ -51,13 +60,7 @@ SurveyData_new <- SurveyData
 
   # --- Monte Carlo simulation: create SurveyData_copy ---
   meta_prepared <- meta_prepared_new
-park <- 1
-exp_name <- c("tron")
-
-# Define date ranges for each experience
-exp_date_ranges <- list(
-  tron = c("2023-10-11", "2025-09-02")
-)
+park <- as.integer(park_for_sim)
 
 for (name in exp_name) {
   matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
