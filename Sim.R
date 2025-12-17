@@ -159,47 +159,10 @@ meta_preparedPOG
 meta_preparedPOG$NEWGC<-meta_preparedPOG$Att*meta_preparedPOG$NEWPOG
 metaPOG<-merge(meta_prepared,meta_preparedPOG[,c("Park","name","NEWGC")],by=c('name', "Park"))
 
-setDT(meta_prepared)
-setDT(QTRLY_GC)
-
-pick_col <- function(dt, candidates_lc) {
-  nm <- names(dt)
-  low <- tolower(nm)
-  pos <- match(candidates_lc, low)
-  pos <- pos[!is.na(pos)]
-  if (length(pos) == 0) {
-    stop(
-      "Missing required columns. Looked for: ",
-      paste(candidates_lc, collapse = ", "),
-      ". Available: ",
-      paste(nm, collapse = ", ")
-    )
-  }
-  nm[pos[1]]
-}
-
-# Normalize join keys in meta_prepared (robust to NAME/name, park/Park)
-mp_name_col <- pick_col(meta_prepared, c("name"))
-mp_park_col <- pick_col(meta_prepared, c("park"))
-if (mp_name_col != "name") setnames(meta_prepared, mp_name_col, "name")
-if (mp_park_col != "Park") setnames(meta_prepared, mp_park_col, "Park")
-
-# Build join table from QTRLY_GC (robust to NAME/name, park/Park, gc/GC)
-gc_name_col <- pick_col(QTRLY_GC, c("name"))
-gc_park_col <- pick_col(QTRLY_GC, c("park", "r_park"))
-gc_val_col <- pick_col(QTRLY_GC, c("gc", "quarterlyguestcarried", "guestcarried"))
-gc_join <- QTRLY_GC[, .(
-  name = get(gc_name_col),
-  Park = get(gc_park_col),
-  QuarterlyGuestCarried = get(gc_val_col)
-)]
-
-meta_prepared2 <- merge(
-  meta_prepared,
-  gc_join,
-  by = c("name", "Park"),
-  all.x = TRUE
-)
+library('sqldf')
+meta_prepared2<-sqldf("select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join
+QTRLY_GC b on a.name=b.name and a.Park = b.Park")
+setDT(meta_prepared2)
 setDT(metaPOG)
 meta_prepared2[metaPOG, on=c("name","Park"), QuarterlyGuestCarried:=i.NEWGC]
 meta_prepared2
