@@ -1099,24 +1099,44 @@ print(list(
       return()
     }
  
-    ggplot(df_box, aes(x = "", y = Inc_EARS_Pct)) +
-      geom_boxplot(fill = "skyblue") +
+    # Bootstrap CI for the MEAN overall impact across sim runs
+    x <- df_box$Inc_EARS_Pct
+    x <- x[is.finite(x)]
+    if (!length(x)) {
+      plot.new()
+      text(0.5, 0.5, "No data available", cex = 1.5)
+      return()
+    }
+
+    set.seed(1)
+    B <- 2000L
+    boot_means <- replicate(B, mean(sample(x, size = length(x), replace = TRUE), na.rm = TRUE))
+    ci <- stats::quantile(boot_means, probs = c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+    mu <- mean(x, na.rm = TRUE)
+
+    ggplot(df_box, aes(x = Inc_EARS_Pct)) +
+      geom_histogram(bins = min(30L, max(10L, length(x))), fill = "#5DADE2", color = "white", alpha = 0.9) +
+      geom_vline(xintercept = mu, linewidth = 0.9, color = "#1B4F72") +
+      geom_vline(xintercept = ci[1], linetype = "dashed", linewidth = 0.9, color = "#1B4F72") +
+      geom_vline(xintercept = ci[2], linetype = "dashed", linewidth = 0.9, color = "#1B4F72") +
+      annotate("text", x = mu, y = Inf, label = "Mean", vjust = 1.2, size = 3, family = "Century Gothic", color = "#1B4F72") +
+      annotate("text", x = ci[1], y = Inf, label = "2.5%", vjust = 2.6, size = 3, family = "Century Gothic", color = "#1B4F72") +
+      annotate("text", x = ci[2], y = Inf, label = "97.5%", vjust = 2.6, size = 3, family = "Century Gothic", color = "#1B4F72") +
       labs(
         title = NULL,
-        x = NULL,
-        y = "Incremental EARS (% of Park Actuals)"
+        x = "Incremental EARS (% of Park Actuals)",
+        y = "Count of simulation runs"
       ) +
       theme_minimal(base_family = "Century Gothic") +
       theme(
         plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-        axis.title.x = element_blank(),
-        axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
         legend.position = "none",
+        axis.title.x = element_text(family = "Century Gothic"),
         axis.title.y = element_text(family = "Century Gothic"),
+        axis.text.x = element_text(family = "Century Gothic"),
         axis.text.y = element_text(family = "Century Gothic")
       ) +
-      scale_y_continuous(labels = scales::percent_format(scale = 1))
+      scale_x_continuous(labels = scales::percent_format(scale = 1))
   })
  
   output$boxplot_lifestage <- renderPlot({
