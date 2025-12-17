@@ -159,11 +159,14 @@ meta_preparedPOG
 meta_preparedPOG$NEWGC<-meta_preparedPOG$Att*meta_preparedPOG$NEWPOG
 metaPOG<-merge(meta_prepared,meta_preparedPOG[,c("Park","name","NEWGC")],by=c('name', "Park"))
 
-library('sqldf')
-meta_prepared2<-sqldf("select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join
-QTRLY_GC b on a.name=b.name and a.Park = b.Park")
-#metaPOG$QuarterlyGuestCarried<-metaPOG$NEWGC
-setDT(meta_prepared2)
+setDT(meta_prepared)
+setDT(QTRLY_GC)
+meta_prepared2 <- merge(
+  meta_prepared,
+  QTRLY_GC[, .(name, Park, QuarterlyGuestCarried = GC)],
+  by = c("name", "Park"),
+  all.x = TRUE
+)
 setDT(metaPOG)
 meta_prepared2[metaPOG, on=c("name","Park"), QuarterlyGuestCarried:=i.NEWGC]
 meta_prepared2
