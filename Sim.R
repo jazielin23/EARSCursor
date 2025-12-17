@@ -20,6 +20,7 @@ SurveyData <- SurveyData_new
 replacementsave<-c()
 library(nnet)
 library(gtools)
+verbose <- FALSE
 maxFQ<-max(SurveyData$fiscal_quarter)
 minFQ<-min(SurveyData$fiscal_quarter)
 SurveyCheckFinal<-c()
@@ -350,7 +351,7 @@ weights22<-rbind(weightedEEs,weightsPref1,weightsPref2,weightsPref3,weightsPref4
 CantRideWeight22<-cantride2[,-1]
     CantRideWeight22
   #  CantRideWeight22[!is.na(CantRideWeight22),]<-0
-print(weights22)
+if (verbose) print(weights22)
     #The weights above (weightedEEs) are now multiplied to the experience data so we can convert the data into overall excellent experiences
     #The Cant Ride weights are a separate weight for Guests that wanted to ride but couldnt.  Think of these weights as runs against our team
 
@@ -500,7 +501,7 @@ for (j in 1:5) {
       }
     }
   }
-  print(c(i, j))
+  if (verbose) print(c(i, j))
 }
 
 for (i in 1:4){
@@ -526,12 +527,12 @@ for (j in 1:5) {
         }
         if (length(rows_5) > 0) {
           SurveyData22[rows_5, colname2] <- CantRideWeight22[park, 5 + 2] * (1 * SurveyData22[rows_5, rideexp_fix[k]])
-            if(colname2=="safaris3"&FQ==4){
-            print(c(colname2, rideagain_fix[k]))
-            print(weights22[i + (park - 1) * 15+10, j + 2])
-            print(SurveyData22[rows, rideexp_fix[k]])
-            print(length(rows))
-}
+            if (verbose && colname2 == "safaris3" && FQ == 4) {
+              print(c(colname2, rideagain_fix[k]))
+              print(weights22[i + (park - 1) * 15+10, j + 2])
+              print(SurveyData22[rows, rideexp_fix[k]])
+              print(length(rows))
+            }
         }
       }
     }
@@ -602,7 +603,7 @@ for (j in 1:5) {
       }
     }
   }
-  print(c(i, j))
+  if (verbose) print(c(i, j))
 }
     }
     
@@ -1364,7 +1365,7 @@ for (j in 1:5) {
       }
     }
   }
-  print(c(i, j))
+  if (verbose) print(c(i, j))
 }
 
 for (i in 1:4) {
@@ -1456,7 +1457,7 @@ for (i in 1:4) {
         }
       }
     }
-    print(c(i, j))
+    if (verbose) print(c(i, j))
   }
 }
 
@@ -2132,7 +2133,7 @@ EARSx<-EARSFinal_Final
 EARSx$EARS<- EARSx$wRAA/ EARSx$RPW
 
 EARSx$EARS<-    (EARSx$EARS+EARSx$replacement)*EARSx$p
-    print(unique(EARSx$QTR))
+    if (verbose) print(unique(EARSx$QTR))
 EARSTotal<-rbind(EARSTotal,EARSx)
     
 #EARSTotal<-sqldf('select a.*, b.EARS as Actual from EARSTotal a left join EARS b on a.NAME = b.NAME and
