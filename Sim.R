@@ -391,14 +391,9 @@ metadata[,3]<-tolower(metadata[,3])
 metadata[,18]<-tolower(metadata[,18])
 metadata[,19]<-tolower(metadata[,19])
 
-rideagain<-c()
-rideexp<-c()
-rideexp_fix<-c()
-for(i in 1:length(metadata[,2])){
-rideagain<-c(rideagain,metadata[,3][i])
-    rideexp<-c(rideexp,metadata[which(!is.na(metadata[,3])),2][i])
-rideexp_fix<-c(rideexp_fix,metadata[which(!is.na(metadata[,2])),2][i])
-    }
+rideagain <- metadata[,3]
+rideexp <- metadata[!is.na(metadata[,3]),2]
+rideexp_fix <- metadata[!is.na(metadata[,2]),2]
 
 rideagain <- rideagain[!is.na(rideagain)]
 rideexp <- rideexp[!is.na(rideexp)]
@@ -409,43 +404,31 @@ for(i in 1:length(rideagain)){
 SurveyData22[which(SurveyData22[,rideexp[i]] !=0 & SurveyData22[,rideagain[i]] ==0),rideagain[i]]<-1
     }
 
-ridesexp<-c()
-for(i in 1:length(metadata[,2])){
-ridesexp<-c(ridesexp,unlist(strsplit(metadata[i,2], split='ridesexp_', fixed=TRUE))[2])
-    }
-ridesexp <- ridesexp[!is.na(ridesexp)]
-
-ridesexp<-sub(".*_", "", ridesexp)
+ridesexp_full <- metadata[,2]
+ridesexp_full <- ridesexp_full[!is.na(ridesexp_full) & grepl("ridesexp_", ridesexp_full, fixed = TRUE)]
+ridesexp <- sub("^.*ridesexp_", "", ridesexp_full)
+ridesexp <- sub(".*_", "", ridesexp)
 
 
 
-entexp<-c()
-for(i in 1:length(metadata[,2])){
-entexp<-c(entexp,unlist(strsplit(metadata[i,2], split='entexp_', fixed=TRUE))[2])
-    }
-entexp <- entexp[!is.na(entexp)]
-entexp <-sub(".*_", "", entexp )
+entexp_full <- metadata[,2]
+entexp_full <- entexp_full[!is.na(entexp_full) & grepl("entexp_", entexp_full, fixed = TRUE)]
+entexp <- sub("^.*entexp_", "", entexp_full)
+entexp <- sub(".*_", "", entexp)
 
-charexp<-c()
-for(i in 1:length(metadata[,2])){
-charexp<-c(charexp,unlist(strsplit(metadata[i,2], split='charexp_', fixed=TRUE))[2])
-    howexp<-paste("charhow",charexp,sep="_")
-    }
-charexp <- charexp[!is.na(charexp)]
-charexp <-sub(".*_", "", charexp)
-howexp<-howexp[howexp!="charhow_NA"]
+charexp_full <- metadata[,2]
+charexp_full <- charexp_full[!is.na(charexp_full) & grepl("charexp_", charexp_full, fixed = TRUE)]
+charexp_after_prefix <- sub("^.*charexp_", "", charexp_full)
+howexp <- paste("charhow", charexp_after_prefix, sep = "_")
+howexp <- howexp[howexp != "charhow_NA"]
+charexp <- sub(".*_", "", charexp_after_prefix)
 
 for(i in 1:length(charexp)){
 SurveyData22[,as.character(colnames(SurveyData22)[grepl('charexp_', colnames(SurveyData22))])[i]]<-SurveyData22[,as.character(colnames(SurveyData22)[grepl('charexp_', colnames(SurveyData22))])[i]]*as.numeric(SurveyData22[,colnames(SurveyData22) == howexp[i]]<2|SurveyData22[,colnames(SurveyData22) == howexp[i]]==3|SurveyData22[,colnames(SurveyData22) == howexp[i]]==4)
     }
 
-rideagainx<-c()
-RIDEX<-c()
-for(i in 1:length(metadata[,2])){
-rideagainx<-c(rideagainx,metadata[,18][i])
-    RIDEX<-c(RIDEX,metadata[which(!is.na(metadata[,18])),2][i])
-
-    }
+rideagainx <- metadata[,18]
+RIDEX <- metadata[!is.na(metadata[,18]),2]
 rideagainx <- tolower(rideagainx[!is.na(rideagainx)])
 RIDEX <- tolower(RIDEX[!is.na(RIDEX)])
 
@@ -456,21 +439,12 @@ SurveyData22[which(SurveyData22[,RIDEX[i]] ==0 & SurveyData22[,rideagainx[i]] ==
 
     }
 
-for(i in 1:length(ridesexp)){
-SurveyData22[,paste(ridesexp,"2", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    SurveyData22[,paste(ridesexp,"3", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    }
-
-
-for(i in 1:length(entexp)){
-SurveyData22[,paste(entexp,"2", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    SurveyData22[,paste(entexp,"3", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    }
-
-for(i in 1:length(charexp)){
-SurveyData22[,paste(charexp,"2", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    SurveyData22[,paste(charexp,"3", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    }
+new_cols <- unique(c(
+  paste0(ridesexp, "2"), paste0(ridesexp, "3"),
+  paste0(entexp, "2"), paste0(entexp, "3"),
+  paste0(charexp, "2"), paste0(charexp, "3")
+))
+SurveyData22[, new_cols] <- 0
 
 idx_non_na <- which(!is.na(metadata[,2]))
  rideagain_fix<-metadata[,3]
@@ -1299,39 +1273,7 @@ Play_Against20
 
 CountData22<-SurveyData22
 
-ridesexp<-c()
-for(i in 1:length(metadata[,2])){
-ridesexp<-c(ridesexp,unlist(strsplit(metadata[i,2], split='ridesexp_', fixed=TRUE))[2])
-    }
-ridesexp <- ridesexp[!is.na(ridesexp)]
-
-ridesexp<-sub(".*_", "", ridesexp)
-
-
-
-entexp<-c()
-for(i in 1:length(metadata[,2])){
-entexp<-c(entexp,unlist(strsplit(metadata[i,2], split='entexp_', fixed=TRUE))[2])
-    }
-entexp <- entexp[!is.na(entexp)]
-entexp <-sub(".*_", "", entexp )
-
-charexp<-c()
-for(i in 1:length(metadata[,2])){
-charexp<-c(charexp,unlist(strsplit(metadata[i,2], split='charexp_', fixed=TRUE))[2])
-    }
-charexp <- charexp[!is.na(charexp)]
-charexp <-sub(".*_", "", charexp)
-
-rideagainx<-c()
-RIDEX<-c()
-for(i in 1:length(metadata[,2])){
-rideagainx<-c(rideagainx,metadata[,18][i])
-    RIDEX<-c(RIDEX,metadata[which(!is.na(metadata[,18])),2][i])
-
-    }
-rideagainx <- tolower(rideagainx[!is.na(rideagainx)])
-RIDEX <- tolower(RIDEX[!is.na(RIDEX)])
+## Reuse ridesexp/entexp/charexp/rideagainx/RIDEX computed above
 
 
 
@@ -1340,21 +1282,7 @@ CountData22[which(CountData22[,RIDEX[i]] ==0 & CountData22[,rideagainx[i]] ==1 &
 
     }
 
-for(i in 1:length(ridesexp)){
-CountData22[,paste(ridesexp,"2", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    CountData22[,paste(ridesexp,"3", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    }
-
-
-for(i in 1:length(entexp)){
-CountData22[,paste(entexp,"2", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    CountData22[,paste(entexp,"3", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    }
-
-for(i in 1:length(charexp)){
-CountData22[,paste(charexp,"2", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    CountData22[,paste(charexp,"3", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    }
+CountData22[, new_cols] <- 0
 
 
 idx_non_na <- which(!is.na(metadata[,2]))
