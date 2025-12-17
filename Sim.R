@@ -161,6 +161,16 @@ metaPOG<-merge(meta_prepared,meta_preparedPOG[,c("Park","name","NEWGC")],by=c('n
 
 setDT(meta_prepared)
 setDT(QTRLY_GC)
+
+# Normalize join column names from QTRLY_GC (robust to NAME/name, park/Park, gc/GC)
+nm_gc <- names(QTRLY_GC)
+idx_name <- which(tolower(nm_gc) == "name")
+idx_park <- which(tolower(nm_gc) == "park")
+idx_gc <- which(tolower(nm_gc) == "gc")
+if (length(idx_name) == 1 && nm_gc[idx_name] != "name") setnames(QTRLY_GC, nm_gc[idx_name], "name")
+if (length(idx_park) == 1 && nm_gc[idx_park] != "Park") setnames(QTRLY_GC, nm_gc[idx_park], "Park")
+if (length(idx_gc) == 1 && nm_gc[idx_gc] != "GC") setnames(QTRLY_GC, nm_gc[idx_gc], "GC")
+
 meta_prepared2 <- merge(
   meta_prepared,
   QTRLY_GC[, .(name, Park, QuarterlyGuestCarried = GC)],
