@@ -1,6 +1,6 @@
 library(dataiku)
-library(future)
-library(future.apply)
+library(foreach)
+library(doParallel)
 
 meta_prepared_new <- dkuReadDataset("MetaDataFinalTaxonomy")
 AttQTR_new <- dkuReadDataset("Attendance")
@@ -11,17 +11,8 @@ SurveyData_new <- dkuReadDataset("FY24_prepared")
 
 n_runs <- 10
 num_cores <- 5
-# SurveyData_new is very large; future.apply will otherwise error on globals size
-options(future.globals.maxSize = max(getOption("future.globals.maxSize", 0), 4 * 1024^3))
-# Allow forked workers when supported (Linux)
-options(future.fork.enable = TRUE)
-# Prefer forked workers on Linux to avoid exporting huge globals (e.g. SurveyData_new)
-if (future::supportsMulticore()) {
-  future::plan(future::multicore, workers = num_cores)
-} else {
-  # Fallback (exports globals)
-  future::plan(future::multisession, workers = num_cores)
-}
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
 
 
 # Reading in data and setting initial parameters for loop over each quarter
@@ -38,9 +29,11 @@ CountCheckFinal<-c()
 maxFQ<-4
 
 # Parallel loop
-EARSTotal_list <- future.apply::future_lapply(
-  X = seq_len(n_runs),
-  FUN = function(run) {
+EARSTotal_list <- foreach(
+  run = 1:n_runs,
+  .combine = rbind,
+  .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2", "reshape")
+) %dopar% {
  EARSFinal_Final<-c()
     EARSx<-c()
     EARSTotal<-c()
@@ -2162,9 +2155,6 @@ result$Incremental_EARS<-result$Simulation_EARS-result$Actual_EARS
     EARSTotal2<-result
    EARSTotal2$sim_run <- run
   EARSTotal2
-  },
-  future.packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2", "reshape"),
-  future.seed = TRUE
-)
-
-Simulation_Results <- as.data.frame(data.table::rbindlist(EARSTotal_list, fill = TRUE))
+}
+stopCluster(cl)
+Simulation_Results<-EARSTotal_list
