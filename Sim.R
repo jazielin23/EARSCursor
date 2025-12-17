@@ -11,12 +11,15 @@ SurveyData_new <- dkuReadDataset("FY24_prepared")
 
 n_runs <- 10
 num_cores <- 5
+# SurveyData_new is very large; future.apply will otherwise error on globals size
+options(future.globals.maxSize = max(getOption("future.globals.maxSize", 0), 4 * 1024^3))
+# Allow forked workers when supported (Linux)
+options(future.fork.enable = TRUE)
 # Prefer forked workers on Linux to avoid exporting huge globals (e.g. SurveyData_new)
 if (future::supportsMulticore()) {
   future::plan(future::multicore, workers = num_cores)
 } else {
-  # Fallback (may export globals); raise cap to avoid immediate failure
-  options(future.globals.maxSize = max(getOption("future.globals.maxSize", 0), 2 * 1024^3))
+  # Fallback (exports globals)
   future::plan(future::multisession, workers = num_cores)
 }
 
