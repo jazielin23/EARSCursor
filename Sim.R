@@ -451,7 +451,7 @@ for (j in 1:5) {
     for (k in idx_ride) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ride): offset = 0
 
         if (length(rows) > 0) {
@@ -464,7 +464,7 @@ for (j in 1:5) {
     for (k in idx_ent) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ent): offset = 0
 
         if (length(rows) > 0) {
@@ -478,7 +478,7 @@ for (j in 1:5) {
     for (k in idx_flash) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Flaship/Anchor): offset = 40
 
         if (length(rows) > 0) {
@@ -491,7 +491,7 @@ for (j in 1:5) {
     for (k in idx_show) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Show): offset = 15
 
         if (length(rows) > 0) {
@@ -513,14 +513,14 @@ for (j in 1:5) {
     for (k in idx_ride) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ride): offset = 0
         if (length(rows) > 0) {
           SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+10, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == -1]
-        rows_5 <- idx_p5[SurveyData22[idx_p5, rideexp_fix[k]] == -1]
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -541,14 +541,14 @@ for (j in 1:5) {
     for (k in idx_flash) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Flaship/Anchor): offset = 40
         if (length(rows) > 0) {
           SurveyData22[rows, colname2] <- weights22[i + (park - 1) *  5+60 , j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == -1]
-        rows_5 <- idx_p5[SurveyData22[idx_p5, rideexp_fix[k]] == -1]
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -563,14 +563,14 @@ for (j in 1:5) {
     for (k in idx_show) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Show): offset = 15
         if (length(rows) > 0) {
           SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+5, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == -1]
-        rows_5 <- idx_p5[SurveyData22[idx_p5, rideexp_fix[k]] == -1]
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -585,14 +585,14 @@ for (j in 1:5) {
     for (k in idx_play) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        rows <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Play): offset = 0
         if (length(rows) > 0) {
           SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- idx_pj[SurveyData22[idx_pj, rideexp_fix[k]] == -1]
-        rows_5 <- idx_p5[SurveyData22[idx_p5, rideexp_fix[k]] == -1]
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -1315,7 +1315,7 @@ for (j in 1:5) {
     for (k in idx_ride) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ride): offset = 0
 
         if (length(rows) > 0) {
@@ -1328,7 +1328,7 @@ for (j in 1:5) {
     for (k in idx_ent) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ent): offset = 0
 
         if (length(rows) > 0) {
@@ -1342,7 +1342,7 @@ for (j in 1:5) {
     for (k in idx_flash) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Flaship/Anchor): offset = 40
 
         if (length(rows) > 0) {
@@ -1355,7 +1355,7 @@ for (j in 1:5) {
     for (k in idx_show) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Show): offset = 15
 
         if (length(rows) > 0) {
@@ -1377,16 +1377,16 @@ for (i in 1:4) {
       for (k in idx_ride) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
           if (length(rows) > 0) {
             CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == -1]
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- idx_p5[CountData22[idx_p5, rideexp_fix[k]] == -1]
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1398,16 +1398,16 @@ for (i in 1:4) {
       for (k in idx_flash) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
           if (length(rows) > 0) {
             CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == -1]
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- idx_p5[CountData22[idx_p5, rideexp_fix[k]] == -1]
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1419,16 +1419,16 @@ for (i in 1:4) {
       for (k in idx_show) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
           if (length(rows) > 0) {
             CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == -1]
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- idx_p5[CountData22[idx_p5, rideexp_fix[k]] == -1]
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1440,16 +1440,16 @@ for (i in 1:4) {
       for (k in idx_play) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          rows <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == i]
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
           if (length(rows) > 0) {
             CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- idx_pj[CountData22[idx_pj, rideexp_fix[k]] == -1]
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- idx_p5[CountData22[idx_p5, rideexp_fix[k]] == -1]
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
