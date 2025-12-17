@@ -633,6 +633,103 @@ print(cond3[rows])
   print(c(i, j))
 }
     }
+    
+    # ---- Block 7: fast aggregation of runs/against (weighted) ----
+    library(data.table)
+    
+    # Build mapping from metadata variable to short "base" (e.g., safaris -> safaris2/safaris3)
+    meta_var <- as.character(metadata[,2])
+    meta_map <- data.table(
+      Park = metadata$Park,
+      Type = metadata$Type,
+      Category1 = metadata$Category1,
+      base = sub(".*_", "", sub(".*(ridesexp_|entexp_|charexp_)", "", meta_var))
+    )
+    meta_map <- meta_map[!is.na(Park) & !is.na(Type) & !is.na(base) & base != ""]
+    
+    ride_bases <- unique(meta_map[Type == "Ride", base])
+    show_map <- unique(meta_map[Type == "Show" & !is.na(Category1), .(Park, base, Category1)])
+    play_map <- unique(meta_map[Type == "Play" & !is.na(Category1), .(Park, base, Category1)])
+    show_names <- unique(show_map$Category1)
+    play_names <- unique(play_map$Category1)
+    
+    agg_by_base <- function(dt, bases, suffix, skeleton, all_bases) {
+      cols <- paste0(bases, suffix)
+      cols <- cols[cols %in% names(dt)]
+      
+      out <- copy(as.data.table(skeleton))
+      if (length(cols) > 0) {
+        bases2 <- sub(paste0(suffix, "$"), "", cols)
+        tmp <- dt[, c("park", "newgroup", "fiscal_quarter", cols), with = FALSE]
+        setnames(tmp, cols, bases2)
+        tmp_out <- tmp[, lapply(.SD, sum, na.rm = TRUE),
+                       by = .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter),
+                       .SDcols = bases2]
+        out <- merge(out, tmp_out, by = c("Park", "LifeStage", "QTR"), all.x = TRUE)
+      }
+      
+      for (nm in all_bases) {
+        if (!nm %in% names(out)) out[, (nm) := 0]
+        out[is.na(get(nm)), (nm) := 0]
+      }
+      setcolorder(out, c("Park", "LifeStage", "QTR", all_bases))
+      as.data.frame(out)
+    }
+    
+    agg_by_category <- function(dt, map_dt, suffix, skeleton, all_names) {
+      out <- copy(as.data.table(skeleton))
+      for (nm in all_names) out[, (nm) := 0]
+      if (nrow(map_dt) == 0) {
+        setcolorder(out, c("Park", "LifeStage", "QTR", all_names))
+        return(as.data.frame(out))
+      }
+      
+      cols <- unique(paste0(map_dt$base, suffix))
+      cols <- cols[cols %in% names(dt)]
+      if (length(cols) == 0) {
+        setcolorder(out, c("Park", "LifeStage", "QTR", all_names))
+        return(as.data.frame(out))
+      }
+      
+      dt_sub <- dt[, c("park", "newgroup", "fiscal_quarter", cols), with = FALSE]
+      long <- melt(
+        dt_sub,
+        id.vars = c("park", "newgroup", "fiscal_quarter"),
+        measure.vars = cols,
+        variable.name = "col",
+        value.name = "value",
+        variable.factor = FALSE
+      )
+      long[, base := sub(paste0(suffix, "$"), "", col)]
+      
+      map2 <- unique(as.data.table(map_dt)[, .(park = Park, base, NAME = Category1)])
+      long <- merge(long, map2, by = c("park", "base"), all = FALSE)
+      
+      grp <- long[, .(value = sum(value, na.rm = TRUE)),
+                  by = .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter, NAME)]
+      wide <- dcast(grp, Park + LifeStage + QTR ~ NAME, value.var = "value", fill = 0)
+      wide <- merge(out[, .(Park, LifeStage, QTR)], wide, by = c("Park", "LifeStage", "QTR"), all.x = TRUE)
+      
+      for (nm in all_names) {
+        if (!nm %in% names(wide)) wide[, (nm) := 0]
+        wide[is.na(get(nm)), (nm) := 0]
+      }
+      setcolorder(wide, c("Park", "LifeStage", "QTR", all_names))
+      as.data.frame(wide)
+    }
+    
+    dtw <- as.data.table(SurveyData22)
+    skeleton_w <- unique(dtw[, .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter)])
+    
+    Ride_Runs20 <- agg_by_base(dtw, ride_bases, "2", skeleton_w, ride_bases)
+    Ride_Against20 <- agg_by_base(dtw, ride_bases, "3", skeleton_w, ride_bases)
+    Show_Runs20 <- agg_by_category(dtw, show_map, "2", skeleton_w, show_names)
+    Show_Against20 <- agg_by_category(dtw, show_map, "3", skeleton_w, show_names)
+    Play_Runs20 <- agg_by_category(dtw, play_map, "2", skeleton_w, play_names)
+    Play_Against20 <- agg_by_category(dtw, play_map, "3", skeleton_w, play_names)
+    # ---- end block 7 (weighted) ----
+    
+    if (FALSE) {
     jorja<-c()
 for(ii in 1:length(metadata[,2])){
 jorja<-c(jorja,sub(".*_","",unlist(strsplit(unlist(strsplit(unlist(strsplit(metadata[ii,2], split=c( 'ridesexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'charexp_'), fixed=TRUE))[1]))
@@ -1211,6 +1308,8 @@ Play_Against20<-data.frame(Play_Against20,Play_Againstx1)
 
 }
 
+}
+
 
 ############################################################################################
 # Now that we have the weighted data we need the raw counts for our weighted metric
@@ -1409,6 +1508,20 @@ for (i in 1:4) {
     print(c(i, j))
   }
 }
+
+# ---- Block 7: fast aggregation of runs/against (original) ----
+dto <- as.data.table(CountData22)
+skeleton_o <- unique(dto[, .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter)])
+
+Ride_OriginalRuns20 <- agg_by_base(dto, ride_bases, "2", skeleton_o, ride_bases)
+Ride_OriginalAgainst20 <- agg_by_base(dto, ride_bases, "3", skeleton_o, ride_bases)
+Show_OriginalRuns20 <- agg_by_category(dto, show_map, "2", skeleton_o, show_names)
+Show_OriginalAgainst20 <- agg_by_category(dto, show_map, "3", skeleton_o, show_names)
+Play_OriginalRuns20 <- agg_by_category(dto, play_map, "2", skeleton_o, play_names)
+Play_OriginalAgainst20 <- agg_by_category(dto, play_map, "3", skeleton_o, play_names)
+# ---- end block 7 (original) ----
+
+if (FALSE) {
 
 jorja<-c()
 for(ii in 1:length(metadata[,2])){
@@ -1958,6 +2071,8 @@ Play_OriginalAgainstx[Play_OriginalAgainstx$Park!=4,-c(1:3)]<-0
     test<-apply(Play_OriginalAgainstx[,-c(1:3)], 1, sum)}
     Play_OriginalAgainstx1<-setNames(data.frame(test),unique(metadata$Category1[ metadata$Type== "Play"   &metadata$Park ==4 ])[zz])
 Play_OriginalAgainst20<-data.frame(Play_OriginalAgainst20,Play_OriginalAgainstx1)
+
+}
 
 }
 ############################################################################################
