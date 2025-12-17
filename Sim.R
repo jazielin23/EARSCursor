@@ -28,7 +28,11 @@ CountCheckFinal<-c()
 maxFQ<-4
 
 # Parallel loop
-EARSTotal_list <- foreach(run = 1:n_runs, .combine = rbind,.packages = c("dataiku","nnet","sqldf","data.table")) %dopar% {
+EARSTotal_list <- foreach(
+  run = 1:n_runs,
+  .combine = rbind,
+  .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2")
+) %dopar% {
  EARSFinal_Final<-c()
     EARSx<-c()
     EARSTotal<-c()
@@ -95,14 +99,12 @@ for (name in exp_name) {
     }
                                                SurveyDataSim<-SurveyData
                      #meta_prepared_new <- meta_prepared_new[!meta_prepared_new$Variable %in% removed_rides, ]
+# Quarter range (DT read removed; values were hardcoded anyway)
+FQ <- 1
+maxFQ <- 4
 
-DT <- dkuReadDataset("DT")
-
-#FQ<-DT$FSCL_QTR_NB[as.Date(DT$CLNDR_DT)==as.Date(min(unlist(exp_date_ranges)))]
-FQ<-1
-
-#maxFQ<-DT$FSCL_QTR_NB[as.Date(DT$CLNDR_DT)==as.Date(max(unlist(exp_date_ranges)))]
-maxFQ<-4
+# Load once per simulation run (was loaded each quarter)
+EARS <- dkuReadDataset("EARS_Taxonomy")
 while(FQ<maxFQ+1){
 SurveyData <- SurveyDataSim
 #Setting the FY but this could be changed to be read in automatically from the data
@@ -166,7 +168,6 @@ library('sqldf')
 meta_prepared2<-sqldf("select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join
 QTRLY_GC b on a.name=b.name and a.Park = b.Park")
 #metaPOG$QuarterlyGuestCarried<-metaPOG$NEWGC
-library(data.table)
 setDT(meta_prepared2)
 setDT(metaPOG)
 meta_prepared2[metaPOG, on=c("name","Park"), QuarterlyGuestCarried:=i.NEWGC]
@@ -2195,8 +2196,6 @@ names(wRAA_Table)[length(names(wRAA_Table))]<-"wOBA_Park"
 #Scaling it to the park
     wRAA_Table<-data.frame(wRAA_Table,wOBA_Scale = wRAA_Table$wOBA_Park/wRAA_Table$OBP)
 
-        EARS <- dkuReadDataset("EARS_Taxonomy")
-
 join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
 # Remove duplicate columns from table2 except join keys
 table2_nodup <- EARS[, setdiff(names(EARS), setdiff(names(wRAA_Table), join_keys))]
@@ -2224,7 +2223,6 @@ FQ<-FQ+1
    }
 
 EARS$Actual_EARS<-EARS$EARS
-library(dplyr)
 
 
 # Full join, then keep only id and var1
