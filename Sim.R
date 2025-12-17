@@ -36,11 +36,12 @@ EARSTotal_list <- foreach(run = 1:n_runs, .combine = rbind,.packages = c("dataik
 
 SurveyData <- SurveyData_new
 names(SurveyData) <- tolower(names(SurveyData))
-SurveyData$newgroup<-SurveyData$newgroup1
-    SurveyData$newgroup[SurveyData$newgroup == 4]<-3
-SurveyData$newgroup[SurveyData$newgroup == 5]<-4
-SurveyData$newgroup[SurveyData$newgroup == 6]<-5
-SurveyData$newgroup[SurveyData$newgroup == 7]<-5
+ # Explicit LifeStage mapping (keeps all other values unchanged)
+ SurveyData$newgroup <- SurveyData$newgroup1
+ map_from <- c(4, 5, 6, 7)
+ map_to <- c(3, 4, 5, 5)
+ m <- match(SurveyData$newgroup, map_from)
+ SurveyData$newgroup[!is.na(m)] <- map_to[m[!is.na(m)]]
 SurveyData_new <- SurveyData
 
   # --- Monte Carlo simulation: create SurveyData_copy ---
