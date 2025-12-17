@@ -162,18 +162,41 @@ metaPOG<-merge(meta_prepared,meta_preparedPOG[,c("Park","name","NEWGC")],by=c('n
 setDT(meta_prepared)
 setDT(QTRLY_GC)
 
-# Normalize join column names from QTRLY_GC (robust to NAME/name, park/Park, gc/GC)
-nm_gc <- names(QTRLY_GC)
-idx_name <- which(tolower(nm_gc) == "name")
-idx_park <- which(tolower(nm_gc) == "park")
-idx_gc <- which(tolower(nm_gc) == "gc")
-if (length(idx_name) == 1 && nm_gc[idx_name] != "name") setnames(QTRLY_GC, nm_gc[idx_name], "name")
-if (length(idx_park) == 1 && nm_gc[idx_park] != "Park") setnames(QTRLY_GC, nm_gc[idx_park], "Park")
-if (length(idx_gc) == 1 && nm_gc[idx_gc] != "GC") setnames(QTRLY_GC, nm_gc[idx_gc], "GC")
+pick_col <- function(dt, candidates_lc) {
+  nm <- names(dt)
+  low <- tolower(nm)
+  pos <- match(candidates_lc, low)
+  pos <- pos[!is.na(pos)]
+  if (length(pos) == 0) {
+    stop(
+      "Missing required columns. Looked for: ",
+      paste(candidates_lc, collapse = ", "),
+      ". Available: ",
+      paste(nm, collapse = ", ")
+    )
+  }
+  nm[pos[1]]
+}
+
+# Normalize join keys in meta_prepared (robust to NAME/name, park/Park)
+mp_name_col <- pick_col(meta_prepared, c("name"))
+mp_park_col <- pick_col(meta_prepared, c("park"))
+if (mp_name_col != "name") setnames(meta_prepared, mp_name_col, "name")
+if (mp_park_col != "Park") setnames(meta_prepared, mp_park_col, "Park")
+
+# Build join table from QTRLY_GC (robust to NAME/name, park/Park, gc/GC)
+gc_name_col <- pick_col(QTRLY_GC, c("name"))
+gc_park_col <- pick_col(QTRLY_GC, c("park", "r_park"))
+gc_val_col <- pick_col(QTRLY_GC, c("gc", "quarterlyguestcarried", "guestcarried"))
+gc_join <- QTRLY_GC[, .(
+  name = get(gc_name_col),
+  Park = get(gc_park_col),
+  QuarterlyGuestCarried = get(gc_val_col)
+)]
 
 meta_prepared2 <- merge(
   meta_prepared,
-  QTRLY_GC[, .(name, Park, QuarterlyGuestCarried = GC)],
+  gc_join,
   by = c("name", "Park"),
   all.x = TRUE
 )
