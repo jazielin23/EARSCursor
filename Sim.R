@@ -1,6 +1,6 @@
 library(dataiku)
-library(foreach)
-library(doParallel)
+library(future)
+library(future.apply)
 
 meta_prepared_new <- dkuReadDataset("MetaDataFinalTaxonomy")
 AttQTR_new <- dkuReadDataset("Attendance")
@@ -11,8 +11,7 @@ SurveyData_new <- dkuReadDataset("FY24_prepared")
 
 n_runs <- 10
 num_cores <- 5
-cl <- makeCluster(num_cores)
-registerDoParallel(cl)
+future::plan(future::multisession, workers = num_cores)
 
 
 # Reading in data and setting initial parameters for loop over each quarter
@@ -29,11 +28,9 @@ CountCheckFinal<-c()
 maxFQ<-4
 
 # Parallel loop
-EARSTotal_list <- foreach(
-  run = 1:n_runs,
-  .combine = rbind,
-  .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2")
-) %dopar% {
+EARSTotal_list <- future.apply::future_lapply(
+  X = seq_len(n_runs),
+  FUN = function(run) {
  EARSFinal_Final<-c()
     EARSx<-c()
     EARSTotal<-c()
@@ -2155,6 +2152,9 @@ result$Incremental_EARS<-result$Simulation_EARS-result$Actual_EARS
     EARSTotal2<-result
    EARSTotal2$sim_run <- run
   EARSTotal2
-}
-stopCluster(cl)
-Simulation_Results<-EARSTotal_list
+  },
+  future.packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2", "reshape"),
+  future.seed = TRUE
+)
+
+Simulation_Results <- as.data.frame(data.table::rbindlist(EARSTotal_list, fill = TRUE))
