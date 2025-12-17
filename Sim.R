@@ -692,7 +692,7 @@ print(cond3[rows])
       }
       
       dt_sub <- dt[, c("park", "newgroup", "fiscal_quarter", cols), with = FALSE]
-      long <- melt(
+      long <- data.table::melt(
         dt_sub,
         id.vars = c("park", "newgroup", "fiscal_quarter"),
         measure.vars = cols,
@@ -707,7 +707,7 @@ print(cond3[rows])
       
       grp <- long[, .(value = sum(value, na.rm = TRUE)),
                   by = .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter, NAME)]
-      wide <- dcast(grp, Park + LifeStage + QTR ~ NAME, value.var = "value", fill = 0)
+      wide <- data.table::dcast(grp, Park + LifeStage + QTR ~ NAME, value.var = "value", fill = 0)
       wide <- merge(out[, .(Park, LifeStage, QTR)], wide, by = c("Park", "LifeStage", "QTR"), all.x = TRUE)
       
       for (nm in all_names) {
