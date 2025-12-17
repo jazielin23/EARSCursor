@@ -459,15 +459,11 @@ for (j in 1:5) {
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Ride): offset = 0
 
-          value2 <- weights22[i + (park - 1) * 15+10, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-            
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+10, j + 2]
         }
       }
     }
@@ -479,15 +475,11 @@ for (j in 1:5) {
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Ent): offset = 0
 
-          value2 <- weights22[i + (park - 1) * 15, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15, j + 2]
         }
       }
     }
@@ -500,15 +492,11 @@ for (j in 1:5) {
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Flaship/Anchor): offset = 40
 
-          value2 <- weights22[i + (park - 1) * 5+60 , j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 5+60 , j + 2]
         }
       }
     }
@@ -520,15 +508,11 @@ for (j in 1:5) {
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Show): offset = 15
 
-          value2 <- weights22[i + (park - 1) * 15+5, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+5, j + 2]
         }
       }
     }
@@ -547,28 +531,26 @@ for (j in 1:5) {
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Ride): offset = 0
-        value2 <- weights22[i + (park - 1) * 15+10, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+10, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park)
+        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park)
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
         if (length(rows_5) > 0) {
           SurveyData22[rows_5, colname2] <- CantRideWeight22[park, 5 + 2] * (1 * SurveyData22[rows_5, rideexp_fix[k]])
             if(colname2=="safaris3"&FQ==4){
-            print(c(colname2, rideagain_fix[k],value2))
+            print(c(colname2, rideagain_fix[k]))
             print(weights22[i + (park - 1) * 15+10, j + 2])
             print(cond1[rows])
 print(cond2[rows])
 print(cond3[rows])
-print(cond4[rows])}
+}
         }
       }
     }
@@ -581,16 +563,14 @@ print(cond4[rows])}
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-       cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Flaship/Anchor): offset = 40
-        value2 <- weights22[i + (park - 1) *  5+60 , j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) *  5+60 , j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park)
+        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park)
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -608,16 +588,14 @@ print(cond4[rows])}
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-       cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Show): offset = 15
-        value2 <- weights22[i + (park - 1) * 15+5, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+5, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park)
+        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park)
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -635,16 +613,14 @@ print(cond4[rows])}
         cond1 <- SurveyData22[, rideexp_fix[k]] == i
         cond2 <- SurveyData22$ovpropex == j
         cond3 <- SurveyData22$park == park
-       cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Play): offset = 0
-        value2 <- weights22[i + (park - 1) * 15, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park)
+        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park)
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -1270,14 +1246,11 @@ for (j in 1:5) {
         cond1 <- CountData22[, rideexp_fix[k]] == i
         cond2 <- CountData22$ovpropex == j
         cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Ride): offset = 0
 
-          value2 <- 1* as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
@@ -1289,15 +1262,11 @@ for (j in 1:5) {
         cond1 <- CountData22[, rideexp_fix[k]] == i
         cond2 <- CountData22$ovpropex == j
         cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Ent): offset = 0
 
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
@@ -1310,15 +1279,11 @@ for (j in 1:5) {
         cond1 <- CountData22[, rideexp_fix[k]] == i
         cond2 <- CountData22$ovpropex == j
         cond3 <- CountData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Flaship/Anchor): offset = 40
 
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
@@ -1330,15 +1295,11 @@ for (j in 1:5) {
         cond1 <- CountData22[, rideexp_fix[k]] == i
         cond2 <- CountData22$ovpropex == j
         cond3 <- CountData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- which(cond1 & cond2 & cond3)
         # Suffix "2" (Show): offset = 15
 
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
@@ -1357,18 +1318,16 @@ for (i in 1:4) {
           cond1 <- CountData22[, rideexp_fix[k]] == i
           cond2 <- CountData22$ovpropex == j
           cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- which(cond1 & cond2 & cond3)
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park)
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park)
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1383,18 +1342,16 @@ for (i in 1:4) {
           cond1 <- CountData22[, rideexp_fix[k]] == i
           cond2 <- CountData22$ovpropex == j
           cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- which(cond1 & cond2 & cond3)
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park)
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park)
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1409,18 +1366,16 @@ for (i in 1:4) {
           cond1 <- CountData22[, rideexp_fix[k]] == i
           cond2 <- CountData22$ovpropex == j
           cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- which(cond1 & cond2 & cond3)
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park)
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park)
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1435,18 +1390,16 @@ for (i in 1:4) {
           cond1 <- CountData22[, rideexp_fix[k]] == i
           cond2 <- CountData22$ovpropex == j
           cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- which(cond1 & cond2 & cond3)
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park)
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park)
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
