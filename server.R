@@ -7,378 +7,12 @@ library(ggplot2)
 library(tidyr)
 library(scales)
  
-# ---- Include the optimized simulation code ----
-# Option A (preferred): keep SimulationTest_optimized.R alongside the app and source it
-# source("SimulationTest_optimized.R")
-#
-# Option B: paste the FULL contents of SimulationTest_optimized.R above this app code instead.
-# It must define: run_simulation_dataiku()
-# Optimized helpers for SimulationTest (drop-in)
-#
-# Focus: replace the slow nested loops that create the *2/*3 columns and the
-# repeated string parsing / per-category aggregate loops.
-#
-# Assumptions:
-# - `metadata` is the same table you create from `meta_prepared2`.
-# - `weights22` and `CantRideWeight22` have the same structure as in your script
-#   (numeric weights in columns 3:7, ovpropex levels 1..5).
-# - `SurveyData22` / `CountData22` contain `park`, `ovpropex`, `fiscal_quarter`, `newgroup`.
-
-suppressPackageStartupMessages({
-  library(data.table)
-})
-
-# --- small utilities ---
-
-.as_int_ov <- function(x) {
-  # ovpropex sometimes comes in as factor; normalize to integer.
-  if (is.factor(x)) {
-    suppressWarnings(as.integer(as.character(x)))
-  } else {
-    suppressWarnings(as.integer(x))
-  }
-}
-
-.base_name <- function(col) {
-  # Matches your original: sub("^[^_]+_[^_]+_", "", rideexp_fix[k])
-  sub("^[^_]+_[^_]+_", "", tolower(col))
-}
-
-# Compute the output vector for one experience column.
-# - score2: runs scored (only rating==5)
-# - score3: runs against (ratings 1..4 + can't-ride == -1)
-.score_vectors <- function(x, ov_col_idx, w_mat, cant_vec) {
-  # x: integer ratings vector (can include -1,0,1..5)
-  out2 <- numeric(length(x))
-  out3 <- numeric(length(x))
-
-  # Rating==5 -> runs scored
-  idx2 <- which(x == 5L & ov_col_idx > 0L)
-  if (length(idx2)) {
-    out2[idx2] <- w_mat[5L, ov_col_idx[idx2]]
-  }
-
-  # Ratings 1..4 -> runs against
-  idx3 <- which(x >= 1L & x <= 4L & ov_col_idx > 0L)
-  if (length(idx3)) {
-    out3[idx3] <- w_mat[cbind(x[idx3], ov_col_idx[idx3])]
-  }
-
-  # Can't-ride sentinel (-1) logic, preserving your sign behavior:
-  # - ovpropex==5: multiply by (1 * x) => -cant
-  # - ovpropex!=5: multiply by (-1 * x) => +cant
-  idx_cr <- which(x == -1L & ov_col_idx > 0L)
-  if (length(idx_cr)) {
-    sign_term <- ifelse(ov_col_idx[idx_cr] == 5L, x[idx_cr], -x[idx_cr])
-    out3[idx_cr] <- cant_vec[ov_col_idx[idx_cr]] * sign_term
-  }
-
-  list(score2 = out2, score3 = out3)
-}
-
-# --- main optimization: replace nested i/j/park/k loops ---
-
-# Apply the weights to create *2 and *3 columns.
-# This replaces the extremely slow nested loops in your script.
-apply_weights_fast <- function(dt, metadata, weights22, CantRideWeight22, FQ) {
-  dt <- as.data.table(dt)
-
-  # Restrict to the quarter once; preserves your filtering semantics.
-  # (If you already filtered dt before calling, this is still safe.)
-  dt <- dt[fiscal_quarter == FQ]
-
-  # Precompute per-row ovpropex col index 1..5 (0 for out-of-range).
-  ov <- .as_int_ov(dt$ovpropex)
-  ov_col_idx <- match(ov, 1:5)
-  ov_col_idx[is.na(ov_col_idx)] <- 0L
-
-  # Numeric weight matrices (5x5) per park + group.
-  W <- as.matrix(weights22[, 3:7, drop = FALSE])
-
-  get_block15 <- function(park) {
-    start <- (park - 1L) * 15L
-    list(
-      play = matrix(W[start + 1:5, ], nrow = 5, byrow = FALSE),
-      show = matrix(W[start + 6:10, ], nrow = 5, byrow = FALSE),
-      ride = matrix(W[start + 11:15, ], nrow = 5, byrow = FALSE)
-    )
-  }
-
-  get_pref <- function(park) {
-    start <- 60L + (park - 1L) * 5L
-    matrix(W[start + 1:5, ], nrow = 5, byrow = FALSE)
-  }
-
-  # CantRideWeight22 has parks in rows 1..4, weights in cols 3..7
-  CR <- as.matrix(CantRideWeight22[, 3:7, drop = FALSE])
-
-  # Prepare metadata for selecting columns.
-  m <- as.data.table(metadata)
-  m[, Variable := tolower(Variable)]
-  m[, Type := as.character(Type)]
-  m[, Genre := as.character(Genre)]
-  m[, Park := as.integer(Park)]
-
-  # We only process experiences that exist in dt.
-  vars_present <- intersect(m$Variable, names(dt))
-  if (!length(vars_present)) return(dt)
-
-  # Base names and output column names.
-  m2 <- unique(m[Variable %in% vars_present, .(Variable, Type, Genre, Park)])
-  m2[, base := .base_name(Variable)]
-  m2[, col2 := paste0(base, "2")]
-  m2[, col3 := paste0(base, "3")]
-
-  # Ensure output columns exist (fast set; no rep(0, n)).
-  new_cols <- unique(c(m2$col2, m2$col3))
-  for (cn in new_cols) {
-    if (!cn %in% names(dt)) set(dt, j = cn, value = 0)
-  }
-
-  # Apply by park to keep weights logic correct and avoid repeated which().
-  for (park in 1:4) {
-    rows_p <- which(dt$park == park)
-    if (!length(rows_p)) next
-
-    blocks <- get_block15(park)
-    pref_mat <- get_pref(park)
-    cant_vec <- CR[park, ]
-
-    # Metadata rows for this park
-    mp <- m2[Park == park]
-    if (!nrow(mp)) next
-
-    # For each experience column in this park, compute score2/score3 vectors.
-    # This is still a loop over columns, but it removes the inner i/j loops and which() explosions.
-    for (r in seq_len(nrow(mp))) {
-      var <- mp$Variable[r]
-      x <- dt[[var]][rows_p]
-
-      # Normalize to integer for fast comparisons.
-      if (is.factor(x)) x <- suppressWarnings(as.integer(as.character(x)))
-      x[is.na(x)] <- 0L
-      x <- as.integer(x)
-
-      # Pick weight matrix based on Type/Genre rules from your original code.
-      w_mat <- NULL
-      if (!is.na(mp$Genre[r]) && (mp$Genre[r] == "Flaship" || mp$Genre[r] == "Anchor")) {
-        w_mat <- pref_mat
-      } else if (!is.na(mp$Type[r]) && mp$Type[r] == "Ride") {
-        w_mat <- blocks$ride
-      } else if (!is.na(mp$Type[r]) && mp$Type[r] == "Show" && !(mp$Genre[r] %in% "Anchor")) {
-        w_mat <- blocks$show
-      } else if (!is.na(mp$Type[r]) && mp$Type[r] == "Play") {
-        w_mat <- blocks$play
-      } else if (!is.na(mp$Type[r]) && mp$Type[r] == "Show") {
-        # Fallback for Show/Anchor edge cases.
-        w_mat <- blocks$show
-      } else {
-        # Unknown type: skip rather than guess.
-        next
-      }
-
-      sc <- .score_vectors(x, ov_col_idx[rows_p], w_mat, cant_vec)
-
-      # Write into dt
-      set(dt, i = rows_p, j = mp$col2[r], value = sc$score2)
-      set(dt, i = rows_p, j = mp$col3[r], value = sc$score3)
-    }
-  }
-
-  dt
-}
-
-# Apply raw-count logic to create *2/*3 columns on CountData22.
-# Equivalent to your CountData loops, but vectorized.
-apply_counts_fast <- function(dt, metadata, FQ) {
-  dt <- as.data.table(dt)
-  dt <- dt[fiscal_quarter == FQ]
-
-  ov <- .as_int_ov(dt$ovpropex)
-  ov_ok <- !is.na(match(ov, 1:5))
-
-  m <- as.data.table(metadata)
-  m[, Variable := tolower(Variable)]
-  m[, Park := as.integer(Park)]
-
-  vars_present <- intersect(m$Variable, names(dt))
-  if (!length(vars_present)) return(dt)
-
-  m2 <- unique(m[Variable %in% vars_present, .(Variable, Park)])
-  m2[, base := .base_name(Variable)]
-  m2[, col2 := paste0(base, "2")]
-  m2[, col3 := paste0(base, "3")]
-
-  new_cols <- unique(c(m2$col2, m2$col3))
-  for (cn in new_cols) {
-    if (!cn %in% names(dt)) set(dt, j = cn, value = 0)
-  }
-
-  for (park in 1:4) {
-    rows_p <- which(dt$park == park)
-    if (!length(rows_p)) next
-
-    mp <- m2[Park == park]
-    if (!nrow(mp)) next
-
-    for (r in seq_len(nrow(mp))) {
-      var <- mp$Variable[r]
-      x <- dt[[var]][rows_p]
-      if (is.factor(x)) x <- suppressWarnings(as.integer(as.character(x)))
-      x[is.na(x)] <- 0L
-      x <- as.integer(x)
-
-      # *2 is rating==5
-      out2 <- as.numeric(x == 5L & ov_ok[rows_p])
-
-      # *3 is rating in 1..4
-      out3 <- as.numeric(x >= 1L & x <= 4L & ov_ok[rows_p])
-
-      # can't-ride sentinel mirrors your CountData logic
-      idx_cr <- which(x == -1L & ov_ok[rows_p])
-      if (length(idx_cr)) {
-        # Match your original CountData behavior:
-        # - if ovpropex == 5: out3 =  1 * x  => -1
-        # - else:           out3 = -1 * x  =>  1
-        ov_sub <- ov[rows_p][idx_cr]
-        out3[idx_cr] <- ifelse(ov_sub == 5L, 1L * x[idx_cr], -1L * x[idx_cr])
-      }
-
-      set(dt, i = rows_p, j = mp$col2[r], value = out2)
-      set(dt, i = rows_p, j = mp$col3[r], value = out3)
-    }
-  }
-
-  dt
-}
-
-# Summarize a set of *2/*3 columns by (park,newgroup,fiscal_quarter).
-# This replaces many repeated aggregate() calls.
-summarize_wide_by_group <- function(dt, bases, suffix, group_cols = c("park", "newgroup", "fiscal_quarter")) {
-  dt <- as.data.table(dt)
-  cols <- paste0(bases, suffix)
-  cols <- intersect(cols, names(dt))
-  if (!length(cols)) {
-    # Return grouped skeleton (no measures) to keep downstream melt logic safe.
-    return(unique(dt[, ..group_cols]))
-  }
-
-  dt[, lapply(.SD, sum, na.rm = TRUE), by = group_cols, .SDcols = cols]
-}
-
-# Summarize Show/Play into Category1 columns (wide), by (park,newgroup,fiscal_quarter).
-# This replaces the massive per-park/per-category aggregate() loops for Show_* and Play_*.
-#
-# Returns columns:
-# - park, newgroup, fiscal_quarter, <Category1_1>, <Category1_2>, ...
-summarize_category_wide_by_group <- function(
-    dt,
-    metadata,
-    type = c("Show", "Play"),
-    suffix,
-    group_cols = c("park", "newgroup", "fiscal_quarter"),
-    # Mirrors your Show logic: exclude Anchor shows from show-category buckets
-    exclude_anchor_genre_for_show = TRUE
-) {
-  type <- match.arg(type)
-  dt <- as.data.table(dt)
-
-  m <- as.data.table(metadata)
-  if (!"Variable" %in% names(m)) stop("metadata must have column `Variable`")
-  if (!"Type" %in% names(m)) stop("metadata must have column `Type`")
-  if (!"Category1" %in% names(m)) stop("metadata must have column `Category1`")
-  if (!"Park" %in% names(m)) stop("metadata must have column `Park`")
-
-  m[, Variable := tolower(Variable)]
-  m[, Type := as.character(Type)]
-  if ("Genre" %in% names(m)) m[, Genre := as.character(Genre)]
-  m[, Park := suppressWarnings(as.integer(Park))]
-
-  m <- m[Type == type & !is.na(Category1) & Category1 != ""]
-  if (!nrow(m)) {
-    # Return empty-ish grouped skeleton
-    out <- unique(dt[, ..group_cols])
-    return(out)
-  }
-
-  if (type == "Show" && exclude_anchor_genre_for_show && "Genre" %in% names(m)) {
-    m <- m[is.na(Genre) | Genre != "Anchor"]
-  }
-
-  m[, base := .base_name(Variable)]
-
-  # Build mapping from (park, base) -> Category1.
-  # IMPORTANT: base names can collide across parks; also metadata can have duplicates.
-  # We de-duplicate to one Category1 per (park, base) to avoid cartesian joins.
-  map <- m[!is.na(Park) & Park %in% 1:4, .(park = Park, base, Category1)]
-  map <- map[!is.na(base) & nzchar(base) & !is.na(Category1) & nzchar(Category1)]
-  map <- map[, .SD[1], by = .(park, base)]
-
-  # Columns available in dt
-  bases <- unique(map$base)
-  cols <- intersect(paste0(bases, suffix), names(dt))
-  if (!length(cols)) {
-    out <- unique(dt[, ..group_cols])
-    return(out)
-  }
-
-  # Melt only relevant columns, map to Category1 by stripping suffix.
-  # IMPORTANT: qualify melt/dcast to data.table to avoid reshape2 masking inside Dataiku/foreach.
-  long <- data.table::melt(
-    dt[, c(group_cols, cols), with = FALSE],
-    id.vars = group_cols,
-    variable.name = "var",
-    value.name = "val",
-    variable.factor = FALSE
-  )
-  long <- as.data.table(long)
-  long[, base := sub(paste0(suffix, "$"), "", var)]
-  # Join by park+base (prevents collisions and cartesian expansion).
-  # Keep only rows with a valid mapping.
-  if (!"park" %in% names(long)) stop("group_cols must include 'park' for category summaries")
-  long <- merge(long, map, by = c("park", "base"), all = FALSE)
-
-  # Aggregate by category
-  agg <- long[, .(val = sum(val, na.rm = TRUE)), by = c(group_cols, "Category1")]
-
-  # Wide
-  data.table::dcast(agg, as.formula(paste(paste(group_cols, collapse = " + "), "~ Category1")), value.var = "val", fill = 0)
-}
-
-# Convenience wrappers to match your downstream variable names
-# (these return Park/LifeStage/QTR columns like your existing tables).
-as_Park_LifeStage_QTR <- function(dt, park_col = "park", life_col = "newgroup", qtr_col = "fiscal_quarter") {
-  dt <- as.data.table(dt)
-  setnames(dt, c(park_col, life_col, qtr_col), c("Park", "LifeStage", "QTR"), skip_absent = TRUE)
-  dt[]
-}
-
-# Strip a trailing suffix (e.g. "2"/"3") from all measure columns.
-# This is important for Ride outputs: EARS taxonomy typically uses the base ride NAME
-# (e.g. "safaris"), not "safaris2"/"safaris3".
-strip_measure_suffix <- function(dt, suffix, id_cols = c("Park", "LifeStage", "QTR")) {
-  dt <- as.data.table(dt)
-  meas <- setdiff(names(dt), id_cols)
-  if (!length(meas)) return(dt)
-  new_names <- sub(paste0(suffix, "$"), "", meas)
-  data.table::setnames(dt, meas, new_names)
-  dt
-}
-
-# ======================================================================================
-# Dataiku-ready runner
-# ======================================================================================
-#
-# Paste this whole file into a Dataiku R recipe, or keep it as a project library.
-#
-# Expected inputs (same names as your original script):
-# - MetaDataFinalTaxonomy, Attendance, GuestCarriedFinal, FY24_prepared, Charcter_Entertainment_POG, DT, EARS_Taxonomy
-#
-# Output:
-# - returns a data.frame `Simulation_Results`
-# - optionally writes to an output dataset if `output_dataset` is provided
-#
-run_simulation_dataiku <- function(
+## -----------------------------------------------------------------------------
+## Embedded simulation runner (ported from Sim.R)
+## -----------------------------------------------------------------------------
+## This is the same foreach/doParallel simulation logic as Sim.R, but embedded
+## directly in server.R so the Shiny runtime does not need to source external files.
+run_simulation_simR_embedded <- function(
     n_runs = 10L,
     num_cores = 5L,
     yearauto = 2024L,
@@ -386,755 +20,859 @@ run_simulation_dataiku <- function(
     exp_name = c("tron"),
     exp_date_ranges = list(tron = c("2023-10-11", "2025-09-02")),
     maxFQ = 4L,
-    output_dataset = NULL
+    verbose = FALSE
 ) {
   suppressPackageStartupMessages({
     library(dataiku)
-    library(future)
-    library(future.apply)
+    library(foreach)
+    library(doParallel)
+    library(nnet)
+    library(gtools)
     library(data.table)
     library(dplyr)
-    library(nnet)
     library(sqldf)
     library(reshape2)
+    library(reshape)
   })
 
-  # ---- Read inputs once (BIG speed win vs reading inside workers) ----
+  # Read inputs (same as Sim.R)
   meta_prepared_new <- dkuReadDataset("MetaDataFinalTaxonomy")
   AttQTR_new <- dkuReadDataset("Attendance")
   QTRLY_GC_new <- dkuReadDataset("GuestCarriedFinal")
+  SurveyDataCheck_new <- dkuReadDataset("FY24_prepared")
+  POG_new <- dkuReadDataset("Charcter_Entertainment_POG")
   SurveyData_new <- dkuReadDataset("FY24_prepared")
-  POG_new <- dkuReadDataset("Charcter_Entertainment_POG") # kept for parity (used elsewhere in your flow)
-  DT <- dkuReadDataset("DT")
-  EARS <- dkuReadDataset("EARS_Taxonomy")
 
-  # Normalize column names once
-  SurveyData_new <- as.data.frame(SurveyData_new)
-  names(SurveyData_new) <- tolower(names(SurveyData_new))
-
-  # future.apply setup
-  # NOTE: Dataiku runs on Linux; multisession is safest (no fork issues).
-  old_plan <- future::plan()
+  cl <- makeCluster(as.integer(num_cores))
   on.exit({
-    try(future::plan(old_plan), silent = TRUE)
+    try(stopCluster(cl), silent = TRUE)
   }, add = TRUE)
-  options(future.globals.maxSize = max(getOption("future.globals.maxSize", 0), 8 * 1024^3))
-  future::plan(future::multisession, workers = as.integer(num_cores))
+  registerDoParallel(cl)
 
-  # ---- Parallel runs (future.apply) ----
-  run_one <- function(run) {
-    # Local copies in each worker
+  # Parallel loop (same as Sim.R)
+  EARSTotal_list <- foreach(
+    run = 1:as.integer(n_runs),
+    .combine = rbind,
+    .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2", "reshape"),
+    .export = c("meta_prepared_new", "AttQTR_new", "QTRLY_GC_new", "SurveyDataCheck_new", "POG_new", "SurveyData_new",
+                "yearauto", "park_for_sim", "exp_name", "exp_date_ranges", "maxFQ", "verbose")
+  ) %dopar% {
+    EARSFinal_Final <- c()
+    EARSx <- c()
+    EARSTotal <- c()
+
     SurveyData <- SurveyData_new
-    meta_prepared <- meta_prepared_new
-
-    # --- your original newgroup cleanup ---
+    names(SurveyData) <- tolower(names(SurveyData))
+    # Explicit LifeStage mapping (keeps all other values unchanged)
     SurveyData$newgroup <- SurveyData$newgroup1
-    SurveyData$newgroup[SurveyData$newgroup == 4] <- 3
-    SurveyData$newgroup[SurveyData$newgroup == 5] <- 4
-    SurveyData$newgroup[SurveyData$newgroup == 6] <- 5
-    SurveyData$newgroup[SurveyData$newgroup == 7] <- 5
+    map_from <- c(4, 5, 6, 7)
+    map_to <- c(3, 4, 5, 5)
+    m <- match(SurveyData$newgroup, map_from)
+    SurveyData$newgroup[!is.na(m)] <- map_to[m[!is.na(m)]]
+    SurveyData_new <- SurveyData
 
-    # --- Monte Carlo simulation block (kept same logic, fewer re-reads) ---
+    # --- Monte Carlo simulation: create SurveyData_copy ---
+    meta_prepared <- meta_prepared_new
     park <- as.integer(park_for_sim)
+
     for (name in exp_name) {
-  matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
-  exp_ride_col <- matched_row$Variable
-  exp_group_col <- matched_row$SPEC
+      matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
+      exp_ride_col <- matched_row$Variable
+      exp_group_col <- matched_row$SPEC
 
-  ride_exists <- exp_ride_col %in% colnames(SurveyData)
-  group_exists <- exp_group_col %in% colnames(SurveyData)
+      ride_exists <- exp_ride_col %in% colnames(SurveyData)
+      group_exists <- exp_group_col %in% colnames(SurveyData)
 
-  if (ride_exists) {
-    segments <- unique(SurveyData$newgroup[SurveyData$park == park])
-    date_range <- exp_date_ranges[[name]]
-    for (seg in segments) {
-      seg_idx <- which(
-        SurveyData$park == park &
-        SurveyData$newgroup == seg &
-        SurveyData$visdate_parsed >= as.Date(date_range[1]) &
-        SurveyData$visdate_parsed <= as.Date(date_range[2])
-      )
-      seg_data <- SurveyData[seg_idx, ]
-      if (group_exists) {
-        for (wanted in c(1, 0)) {
-          to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
-          pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
-          if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
-            sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
-            SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+      if (ride_exists) {
+        segments <- unique(SurveyData$newgroup[SurveyData$park == park])
+        date_range <- exp_date_ranges[[name]]
+        for (seg in segments) {
+          seg_idx <- which(
+            SurveyData$park == park &
+              SurveyData$newgroup == seg &
+              SurveyData$visdate_parsed >= as.Date(date_range[1]) &
+              SurveyData$visdate_parsed <= as.Date(date_range[2])
+          )
+          seg_data <- SurveyData[seg_idx, ]
+          if (group_exists) {
+            for (wanted in c(1, 0)) {
+              to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
+              pool_idx <- which(is.na(seg_data[[exp_ride_col]]) & seg_data[[exp_group_col]] == wanted)
+              if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
+                sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
+                SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+              }
+            }
+          } else {
+            to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]))
+            pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
+            if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
+              sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
+              SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
+            }
           }
-        }
-      } else {
-        to_replace_idx <- which(!is.na(seg_data[[exp_ride_col]]))
-        pool_idx <- which(is.na(seg_data[[exp_ride_col]]))
-        if (length(to_replace_idx) > 0 && length(pool_idx) > 0) {
-          sampled_rows <- seg_data[sample(pool_idx, size = length(to_replace_idx), replace = TRUE), , drop = FALSE]
-          SurveyData[seg_idx[to_replace_idx], ] <- sampled_rows
         }
       }
     }
-  }
-}
+
     SurveyDataSim <- SurveyData
 
-    # ---- quarterly loop ----
-    EARSTotal <- NULL
-    FQ <- 1L
-    while (FQ < as.integer(maxFQ) + 1L) {
+    # Quarter range
+    FQ <- 1
+    maxFQ <- as.integer(maxFQ)
+
+    # Load once per simulation run (was loaded each quarter)
+    EARS <- dkuReadDataset("EARS_Taxonomy")
+
+    while (FQ < maxFQ + 1) {
       SurveyData <- SurveyDataSim
-      SurveyData <- SurveyData[SurveyData$fiscal_quarter == FQ, ]
-      if (!nrow(SurveyData)) {
-        FQ <- FQ + 1L
-        next
-      }
+      yearauto <- as.integer(yearauto)
 
-      # --- Metadata + Attendance + GC for quarter ---
       meta_prepared <- meta_prepared_new
-      AttQTR <- AttQTR_new[AttQTR_new$FQ == FQ, ]
-      QTRLY_GC <- QTRLY_GC_new[QTRLY_GC_new$FQ == FQ, ]
+      AttQTR <- AttQTR_new
+      QTRLY_GC <- QTRLY_GC_new
 
-      # --- POG backfill (kept from your script, but computed once) ---
-      k <- 1L
-      name_vec <- character(0)
-      park_vec <- integer(0)
-      expd_vec <- numeric(0)
-      pog_vec <- numeric(0)
-      while (k < length(meta_prepared$Variable) + 1L) {
-        # Parse the metadata variable the same way as your original code, but safely.
-        # (The original nested unlist/strsplit expression is easy to break with parentheses.)
-        var_k_raw <- as.character(meta_prepared$Variable[k])
-        if (is.na(var_k_raw) || !nzchar(var_k_raw)) {
-          k <- k + 1L
-          next
-        }
+      SurveyData <- SurveyData[SurveyData$fiscal_quarter == FQ, ]
 
-        tmp1 <- strsplit(var_k_raw, "charexp_", fixed = TRUE)[[1]][1]
-        tmp1 <- strsplit(tmp1, "entexp_", fixed = TRUE)[[1]][1]
-        tmp1 <- strsplit(tmp1, "ridesexp_", fixed = TRUE)[[1]][1]
-        if (is.na(tmp1) || !nzchar(tmp1)) {
-          k <- k + 1L
-          next
-        }
+      # POG setup (same as Sim.R)
+      vars <- meta_prepared$Variable
+      base_var <- sub(".*(charexp_|entexp_|ridesexp_)", "", vars)
+      name <- sub(".*_", "", base_var)
+      pahk_str <- sub("_.*", "", base_var)
+      park_map <- c(mk = 1, ec = 2, dhs = 3, dak = 4)
+      park <- unname(park_map[pahk_str])
 
-        eddie <- sub(".*_", "", tmp1)
-        pahk <- gsub("_.*", "", tmp1)
+      # NOTE: preserve existing behavior (numerator is not park-filtered)
+      num <- colSums(SurveyData[, vars, drop = FALSE] > 0, na.rm = TRUE)
+      denom_by_park <- table(SurveyData$park)
+      den <- as.numeric(denom_by_park[as.character(park)])
+      expd <- num / den
 
-        # Map park token -> numeric park id; skip unknown/NA tokens instead of crashing.
-        if (is.na(pahk) || !nzchar(pahk)) {
-          k <- k + 1L
-          next
-        }
-        park_map <- c(mk = 1L, ec = 2L, dhs = 3L, dak = 4L)
-        if (pahk %in% names(park_map)) {
-          pahk <- park_map[[pahk]]
-        } else {
-          pahk_int <- suppressWarnings(as.integer(pahk))
-          if (is.na(pahk_int) || !(pahk_int %in% 1:4)) {
-            k <- k + 1L
-            next
-          }
-          pahk <- pahk_int
-        }
+      meta_preparedPOG <- data.frame(name, Park = park, POG = meta_prepared$POG, expd)
+      AttQTR <- AttQTR[AttQTR$FQ == FQ, ]
+      QTRLY_GC <- QTRLY_GC[QTRLY_GC$FQ == FQ, ]
 
-        # Column lookup should match lowercased SurveyData names.
-        var_col <- tolower(var_k_raw)
-        if (!var_col %in% names(SurveyData)) {
-          k <- k + 1L
-          next
-        }
+      meta_preparedPOG <- merge(meta_preparedPOG, AttQTR, by = "Park")
+      meta_preparedPOG$NEWPOG <- meta_preparedPOG$expd * meta_preparedPOG$Factor
+      meta_preparedPOG$NEWGC <- meta_preparedPOG$Att * meta_preparedPOG$NEWPOG
+      metaPOG <- merge(meta_prepared, meta_preparedPOG[, c("Park", "name", "NEWGC")], by = c("name", "Park"))
 
-        denom <- sum(SurveyData$park == pahk, na.rm = TRUE)
-        expd1 <- if (denom > 0) sum(SurveyData[[var_col]] > 0, na.rm = TRUE) / denom else 0
-
-        name_vec <- c(name_vec, eddie)
-        park_vec <- c(park_vec, pahk)
-        expd_vec <- c(expd_vec, expd1)
-        pog_vec <- c(pog_vec, meta_prepared$POG[k])
-        k <- k + 1L
-      }
-      # Build POG table only for the rows we actually computed (guards can skip rows).
-      metaPOG <- NULL
-      if (length(name_vec)) {
-        meta_preparedPOG <- data.frame(name = name_vec, Park = park_vec, POG = pog_vec, expd = expd_vec)
-        meta_preparedPOG <- merge(meta_preparedPOG, AttQTR, by = "Park")
-        meta_preparedPOG$NEWPOG <- meta_preparedPOG$expd * meta_preparedPOG$Factor
-        meta_preparedPOG$NEWGC <- meta_preparedPOG$Att * meta_preparedPOG$NEWPOG
-        # Defensive selection (Dataiku schemas can introduce/rename columns)
-        need_cols_pog <- c("Park", "name", "NEWGC")
-        if (!all(need_cols_pog %in% names(meta_preparedPOG))) {
-          # Skip POG backfill if required columns are missing
-          metaPOG <- NULL
-        } else {
-          metaPOG <- merge(meta_prepared, meta_preparedPOG[, need_cols_pog], by = c("name", "Park"))
-        }
-      }
-
-      meta_prepared2 <- sqldf::sqldf(
-        "select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join QTRLY_GC b on a.name=b.name and a.Park = b.Park"
-      )
-      # Avoid data.table `:=` inside parallel workers (can error if object isn't a data.table).
-      # Use base merge + replacement instead.
-      meta_prepared2 <- as.data.frame(meta_prepared2)
-      if (!is.null(metaPOG) && nrow(metaPOG)) {
-        # metaPOG can be data.frame or data.table; subset safely
-        need_cols_newgc <- c("name", "Park", "NEWGC")
-        have_cols_newgc <- intersect(need_cols_newgc, names(metaPOG))
-        if (length(have_cols_newgc) < 3) {
-          # If NEWGC isn't present, skip backfill
-          metaPOG2 <- NULL
-        } else {
-          metaPOG2 <- metaPOG[, need_cols_newgc]
-        }
-        if (!is.null(metaPOG2) && nrow(metaPOG2)) {
-          meta_prepared2 <- merge(meta_prepared2, metaPOG2, by = c("name", "Park"), all.x = TRUE)
-          if ("QuarterlyGuestCarried" %in% names(meta_prepared2) && "NEWGC" %in% names(meta_prepared2)) {
-            idx_fill <- is.na(meta_prepared2$QuarterlyGuestCarried) & !is.na(meta_prepared2$NEWGC)
-            meta_prepared2$QuarterlyGuestCarried[idx_fill] <- meta_prepared2$NEWGC[idx_fill]
-            meta_prepared2$NEWGC <- NULL
-          }
-        }
-      }
+      meta_prepared2 <- sqldf("select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join
+QTRLY_GC b on a.name=b.name and a.Park = b.Park")
+      setDT(meta_prepared2)
+      setDT(metaPOG)
+      meta_prepared2[metaPOG, on = c("name", "Park"), QuarterlyGuestCarried := i.NEWGC]
 
       metadata <- data.frame(meta_prepared2)
       names(SurveyData) <- tolower(names(SurveyData))
+      FY <- yearauto
       SurveyData[is.na(SurveyData)] <- 0
-      # Avoid cbind() coercion (can turn everything into character) — keep FY numeric.
-      SurveyData$FY <- as.integer(yearauto)
 
-      # ==================================================================================
-      # Your multinom/GLM block to construct `weights22` + `CantRideWeight22` goes here.
-      # Kept as-is from your original script (not reprinted here to keep this file usable).
-      #
-      # REQUIREMENT:
-      # - after this block finishes, you must have:
-      #   - weights22 : data.frame with numeric weights in columns 3:7
-      #   - CantRideWeight22 : data.frame/matrix with numeric weights in columns 3:7 and 4 rows (parks 1..4)
-      # ==================================================================================
-      # =========================
-      # Build weights22 + CantRideWeight22 (embedded from your original script)
-      # =========================
+      SurveyData <- cbind(SurveyData, FY)
+      SurveyData <- SurveyData[SurveyData$fiscal_quarter == FQ, ]
 
-      .safe_rowSums_eq <- function(df, cols, value) {
-        cols <- intersect(tolower(cols), names(df))
-        if (!length(cols)) return(rep(0, nrow(df)))
-        rowSums(df[, cols, drop = FALSE] == value, na.rm = TRUE)
+      # ---------- multinom weights (same as Sim.R) ----------
+      five_Play <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Play", 2]]] == 5, na.rm = TRUE)
+      four_Play <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Play", 2]]] == 4, na.rm = TRUE)
+      three_Play <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Play", 2]]] == 3, na.rm = TRUE)
+      two_Play <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Play", 2]]] == 2, na.rm = TRUE)
+      one_Play <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Play", 2]]] == 1, na.rm = TRUE)
+      weights_Play <- data.frame(cbind(q1 = SurveyData$q1, one_Play, two_Play, three_Play, four_Play, five_Play, Park = SurveyData$park, FY = SurveyData$FY))
+
+      five_Show <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Show", 2]]] == 5, na.rm = TRUE)
+      four_Show <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Show", 2]]] == 4, na.rm = TRUE)
+      three_Show <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Show", 2]]] == 3, na.rm = TRUE)
+      two_Show <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Show", 2]]] == 2, na.rm = TRUE)
+      one_Show <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Show", 2]]] == 1, na.rm = TRUE)
+      weights_Show <- data.frame(cbind(q1 = SurveyData$q1, one_Show, two_Show, three_Show, four_Show, five_Show, Park = SurveyData$park, FY = SurveyData$FY))
+
+      five_Preferred <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]]] == 5, na.rm = TRUE)
+      four_Preferred <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]]] == 4, na.rm = TRUE)
+      three_Preferred <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]]] == 3, na.rm = TRUE)
+      two_Preferred <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]]] == 2, na.rm = TRUE)
+      one_Preferred <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]]] == 1, na.rm = TRUE)
+      weights_Preferred <- data.frame(cbind(q1 = SurveyData$q1, one_Preferred, two_Preferred, three_Preferred, four_Preferred, five_Preferred, Park = SurveyData$park, FY = SurveyData$FY))
+
+      five_RA <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Ride", 2]]] == 5, na.rm = TRUE)
+      four_RA <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Ride", 2]]] == 4, na.rm = TRUE)
+      three_RA <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Ride", 2]]] == 3, na.rm = TRUE)
+      two_RA <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Ride", 2]]] == 2, na.rm = TRUE)
+      one_RA <- rowSums(SurveyData[, names(SurveyData)[names(SurveyData) %in% metadata[metadata$Type == "Ride", 2]]] == 1, na.rm = TRUE)
+
+      CouldntRide <- c()
+      Experience <- c()
+      for (i in 1:length(metadata[, 2])) {
+        CouldntRide <- c(CouldntRide, metadata[, 18][i])
+        Experience <- c(Experience, metadata[which(!is.na(metadata[, 18])), 2][i])
       }
+      CouldntRide <- tolower(CouldntRide[!is.na(CouldntRide)])
+      Experience <- tolower(Experience[!is.na(Experience)])
 
-      # Ensure lower names
-      names(SurveyData) <- tolower(names(SurveyData))
-      metadata <- as.data.frame(metadata)
-
-      # Defensive column access (Dataiku schemas can vary slightly)
-      n_sr <- nrow(SurveyData)
-      park_col <- if ("park" %in% names(SurveyData)) SurveyData$park else rep(NA_integer_, n_sr)
-      ov_col <- if ("ovpropex" %in% names(SurveyData)) SurveyData$ovpropex else rep(5L, n_sr)
-      SurveyData$FY <- if ("FY" %in% names(SurveyData)) as.integer(SurveyData$FY) else as.integer(yearauto)
-      if (length(SurveyData$FY) != n_sr) SurveyData$FY <- rep(as.integer(yearauto), n_sr)
-
-      # ---- Play ----
-      cols_play <- metadata[metadata$Type == "Play", 2]
-      five_Play <- .safe_rowSums_eq(SurveyData, cols_play, 5)
-      four_Play <- .safe_rowSums_eq(SurveyData, cols_play, 4)
-      three_Play <- .safe_rowSums_eq(SurveyData, cols_play, 3)
-      two_Play <- .safe_rowSums_eq(SurveyData, cols_play, 2)
-      one_Play <- .safe_rowSums_eq(SurveyData, cols_play, 1)
-      weights_Play <- data.frame(
-        one_Play = one_Play, two_Play = two_Play, three_Play = three_Play, four_Play = four_Play, five_Play = five_Play,
-        Park = as.integer(park_col),
-        FY = as.integer(SurveyData$FY)
-      )
-
-      # ---- Show ----
-      cols_show <- metadata[metadata$Type == "Show", 2]
-      five_Show <- .safe_rowSums_eq(SurveyData, cols_show, 5)
-      four_Show <- .safe_rowSums_eq(SurveyData, cols_show, 4)
-      three_Show <- .safe_rowSums_eq(SurveyData, cols_show, 3)
-      two_Show <- .safe_rowSums_eq(SurveyData, cols_show, 2)
-      one_Show <- .safe_rowSums_eq(SurveyData, cols_show, 1)
-      weights_Show <- data.frame(
-        one_Show = one_Show, two_Show = two_Show, three_Show = three_Show, four_Show = four_Show, five_Show = five_Show,
-        Park = as.integer(park_col),
-        FY = as.integer(SurveyData$FY)
-      )
-
-      # ---- Preferred (Flaship/Anchor) ----
-      cols_pref <- metadata[metadata$Genre == "Flaship" | metadata$Genre == "Anchor", 2]
-      five_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 5)
-      four_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 4)
-      three_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 3)
-      two_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 2)
-      one_Preferred <- .safe_rowSums_eq(SurveyData, cols_pref, 1)
-      weights_Preferred <- data.frame(
-        one_Preferred = one_Preferred, two_Preferred = two_Preferred, three_Preferred = three_Preferred,
-        four_Preferred = four_Preferred, five_Preferred = five_Preferred,
-        Park = as.integer(park_col),
-        FY = as.integer(SurveyData$FY)
-      )
-
-      # ---- Rides / Att ----
-      cols_ride <- metadata[metadata$Type == "Ride", 2]
-      five_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 5)
-      four_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 4)
-      three_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 3)
-      two_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 2)
-      one_RA <- .safe_rowSums_eq(SurveyData, cols_ride, 1)
-
-      # ---- can't-get-on ----
-      idx_cr <- which(!is.na(metadata[, 18]) & metadata[, 18] != "")
-      CouldntRide <- tolower(metadata[idx_cr, 18])
-      Experience <- tolower(metadata[idx_cr, 2])
-      CouldntRide <- intersect(CouldntRide, names(SurveyData))
-      Experience <- intersect(Experience, names(SurveyData))
-
-      cantgeton <- rep(0, nrow(SurveyData))
-      if (length(Experience) && length(CouldntRide) && length(Experience) == length(CouldntRide)) {
-        Xexp <- as.matrix(SurveyData[, Experience, drop = FALSE])
-        Xcant <- as.matrix(SurveyData[, CouldntRide, drop = FALSE])
-        ov_ok <- suppressWarnings(as.integer(ov_col) < 6)
-        cantgeton <- rowSums(
-          (Xexp == 0) & (Xcant == 1) & matrix(ov_ok, nrow = nrow(SurveyData), ncol = ncol(Xexp)),
-          na.rm = TRUE
-        )
+      cantgeton <- as.numeric(SurveyData[, Experience[1]] == 0 & SurveyData[, CouldntRide[1]] == 1 & SurveyData$ovpropex < 6)
+      for (i in 2:length(Experience)) {
+        cantgeton <- cantgeton + as.numeric(SurveyData[, Experience[i]] == 0 & SurveyData[, CouldntRide[i]] == 1 & SurveyData$ovpropex < 6)
       }
-      cant <- data.frame(
-        ovpropex = ov_col,
-        cantgeton = cantgeton,
-        Park = as.integer(park_col),
-        FY = as.integer(SurveyData$FY)
-      )
-
-      weights_RA <- data.frame(
-        ovpropex = ov_col,
-        one_RA = one_RA, two_RA = two_RA, three_RA = three_RA, four_RA = four_RA, five_RA = five_RA,
-        Park = as.integer(park_col),
-        FY = as.integer(SurveyData$FY)
-      )
-
+      cant <- data.frame(cbind(ovpropex = SurveyData$ovpropex, cantgeton, Park = SurveyData$park, FY = SurveyData$FY))
+      weights_RA <- data.frame(cbind(ovpropex = SurveyData$ovpropex, one_RA, two_RA, three_RA, four_RA, five_RA, Park = SurveyData$park, FY = SurveyData$FY))
       weights <- cbind(weights_Play, weights_Show, weights_RA, cant, weights_Preferred)
+      weights$ovpropex <- relevel(factor(weights$ovpropex), ref = "5")
 
-      # Faster replacement for:
-      #   odds <- exp(confint(multinom_model, level=...))
-      #   z1 <- apply(odds, 3L, c); z2 <- expand.grid(...)
-      #
-      # We compute the same normal-approx CI odds ratios directly from
-      # multinom coefficients + standard errors, and then assemble the exact
-      # `weights22` structure (Var1, Var2, X1..X5) used downstream.
-      .multinom_ci_odds <- function(model, p) {
-        # p is the percentile for the CI bound (e.g., 0.998 for "99.8 %", 0.15 for "15 %")
-        z <- stats::qnorm(p)
+      # Magic Kingdom Weights
+      weights_mk <- weights[weights$Park == 1 & weights$FY == yearauto, ]
+      test <- multinom(ovpropex ~ cantgeton + one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_mk)
+      odds <- exp(confint(test, level = 0.995))
+      z1 <- apply(odds, 3L, c)
+      z2 <- expand.grid(dimnames(odds)[1:2])
+      jz <- glm((ovpropex == 5) ~ one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_mk, family = "binomial")
+      EXPcol <- exp(jz$coefficients[-1])
+      weightedEEs <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "99.8 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][1:15, ], X5 = EXPcol[1:15])
+      weightedEEs[weightedEEs$Var1 == "five_Play", 3:7] <- weightedEEs[weightedEEs$Var1 == "five_Play", 3:7] * 1
+      weightedEEs[weightedEEs$Var1 == "five_Show", 3:7] <- weightedEEs[weightedEEs$Var1 == "five_Show", 3:7] * 1
+      cantride <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "99.8 %" & data.frame(z2, z1)$Var1 == "cantgeton"), ], X5 = rep(1, 1))
+      weightsPref1 <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "99.8 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][16:20, ], X5 = EXPcol[16:20])
 
-        co <- tryCatch(stats::coef(model), error = function(e) NULL)
-        se <- tryCatch(summary(model)$standard.errors, error = function(e) NULL)
-        if (is.null(co) || is.null(se)) return(NULL)
+      # EPCOT Weights
+      weights_ep <- weights[weights$Park == 2 & weights$FY == yearauto, ]
+      test <- multinom(ovpropex ~ cantgeton + one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_ep)
+      odds <- exp(confint(test, level = 0.99))
+      z1 <- apply(odds, 3L, c)
+      z2 <- expand.grid(dimnames(odds)[1:2])
+      jz <- glm((ovpropex == 5) ~ one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_ep, family = "binomial")
+      EXPcol <- exp(jz$coefficients[-1])
+      weightedEEs_EP <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "99.5 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][1:15, ], X5 = EXPcol[1:15])
+      weightedEEs_EP[weightedEEs_EP$Var1 == "five_Play", 3:7] <- weightedEEs_EP[weightedEEs_EP$Var1 == "five_Play", 3:7] * 1
+      weightedEEs_EP[weightedEEs_EP$Var1 == "five_Show", 3:7] <- weightedEEs_EP[weightedEEs_EP$Var1 == "five_Show", 3:7] * 1
+      weightedEEs <- rbind(weightedEEs, weightedEEs_EP)
+      cantride_EP <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "99.5 %" & data.frame(z2, z1)$Var1 == "cantgeton"), ], X5 = rep(1, 1))
+      cantride <- rbind(cantride, cantride_EP)
+      weightsPref2 <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "99.5 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][16:20, ], X5 = EXPcol[16:20])
 
-        # Coerce to matrix shape: (K classes) x (P predictors)
-        if (is.vector(co)) {
-          co <- matrix(co, nrow = 1L, dimnames = list("1", names(co)))
-        }
-        if (is.vector(se)) {
-          se <- matrix(se, nrow = 1L, dimnames = dimnames(co))
-        }
+      # STUDIOS Weights
+      weights_st <- weights[weights$Park == 3 & weights$FY == yearauto, ]
+      test <- multinom(ovpropex ~ cantgeton + one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_st)
+      odds <- exp(confint(test, level = 0.80))
+      z1 <- apply(odds, 3L, c)
+      z2 <- expand.grid(dimnames(odds)[1:2])
+      jz <- glm((ovpropex == 5) ~ one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_st, family = "binomial")
+      EXPcol <- exp(jz$coefficients[-1])
+      weightedEEs_ST <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "90 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][1:15, ], X5 = EXPcol[1:15])
+      weightedEEs_ST[weightedEEs_ST$Var1 == "five_Play", 3:7] <- weightedEEs_ST[weightedEEs_ST$Var1 == "five_Play", 3:7] * 1
+      weightedEEs_ST[weightedEEs_ST$Var1 == "five_Show", 3:7] <- weightedEEs_ST[weightedEEs_ST$Var1 == "five_Show", 3:7] * 1
+      weightedEEs <- rbind(weightedEEs, weightedEEs_ST)
+      cantride_ST <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "90 %" & data.frame(z2, z1)$Var1 == "cantgeton"), ], X5 = rep(1, 1))
+      cantride <- rbind(cantride, cantride_ST)
+      weightsPref3 <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "90 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][16:20, ], X5 = EXPcol[16:20])
 
-        # Ensure dimnames
-        if (is.null(colnames(co))) colnames(co) <- colnames(se)
-        if (is.null(rownames(co))) rownames(co) <- rownames(se)
-
-        # Compute CI bound odds ratios (including intercept); caller can drop intercept.
-        exp(co + z * se)
-      }
-
-      build_park_weights <- function(park_id, ci_p, ci_label) {
-        .defaults <- function() {
-          # Neutral fallback: all weights = 1.
-          make_df <- function(var1) {
-            data.frame(
-              Var1 = var1,
-              Var2 = rep(ci_label, length(var1)),
-              X1 = rep(1, length(var1)),
-              X2 = rep(1, length(var1)),
-              X3 = rep(1, length(var1)),
-              X4 = rep(1, length(var1)),
-              X5 = rep(1, length(var1)),
-              stringsAsFactors = FALSE
-            )
-          }
-          list(
-            weightedEEs = make_df(c(
-              "one_Play", "two_Play", "three_Play", "four_Play", "five_Play",
-              "one_Show", "two_Show", "three_Show", "four_Show", "five_Show",
-              "one_RA", "two_RA", "three_RA", "four_RA", "five_RA"
-            )),
-            cantride = make_df("cantgeton"),
-            pref = make_df(c("one_Preferred", "two_Preferred", "three_Preferred", "four_Preferred", "five_Preferred"))
-          )
-        }
-
-        w <- weights
-        w$ovpropex <- relevel(factor(w$ovpropex), ref = "5")
-        w <- w[w$Park == park_id & w$FY == yearauto, ]
-
-        # multinom needs 2+ outcome classes; fall back to neutral weights if not available
-        n_classes <- length(unique(w$ovpropex[!is.na(w$ovpropex)]))
-        if (nrow(w) < 10 || n_classes < 2) return(.defaults())
-
-        test <- tryCatch(
-          multinom(
-            ovpropex ~ cantgeton +
-              one_Play + two_Play + three_Play + four_Play + five_Play +
-              one_Show + two_Show + three_Show + four_Show + five_Show +
-              one_RA + two_RA + three_RA + four_RA + five_RA +
-              one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
-            data = w
-          ),
-          error = function(e) NULL
-        )
-        if (is.null(test)) return(.defaults())
-
-        # Multinom CI odds ratios for ovpropex levels 1..4 vs baseline 5.
-        # We fill missing levels with 1s (neutral), matching prior fallbacks.
-        odds_ci <- .multinom_ci_odds(test, p = ci_p)
-        if (is.null(odds_ci)) return(.defaults())
-
-        # Drop intercept; align rows to classes 1..4 (if present).
-        odds_ci <- odds_ci[, setdiff(colnames(odds_ci), "(Intercept)"), drop = FALSE]
-        # Ensure we never emit NA/Inf weights (matches your original "no NA" behavior).
-        odds_ci[!is.finite(odds_ci)] <- 1
-        class_rows <- rownames(odds_ci)
-        # Map class labels to column positions X1..X4
-        cls_map <- suppressWarnings(as.integer(class_rows))
-        # If labels aren't numeric, keep as-is and best-effort map by order.
-        if (anyNA(cls_map)) cls_map <- seq_along(class_rows)
-        cls_map <- pmin(pmax(cls_map, 1L), 4L)
-
-        # Binomial model for X5 column (your original EXPcol)
-        jz <- tryCatch(
-          glm(
-            (ovpropex == 5) ~
-              one_Play + two_Play + three_Play + four_Play + five_Play +
-              one_Show + two_Show + three_Show + four_Show + five_Show +
-              one_RA + two_RA + three_RA + four_RA + five_RA +
-              one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred,
-            data = w, family = "binomial"
-          ),
-          error = function(e) NULL
-        )
-        if (is.null(jz)) return(.defaults())
-        EXPcol <- exp(stats::coef(jz)[-1])
-        EXPcol[!is.finite(EXPcol)] <- 1
-
-        # Helper: assemble Var1 + X1..X5 for a given ordered var list.
-        make_block <- function(var_order, x5_override = NULL) {
-          out <- data.frame(
-            Var1 = var_order,
-            Var2 = rep(ci_label, length(var_order)),
-            X1 = rep(1, length(var_order)),
-            X2 = rep(1, length(var_order)),
-            X3 = rep(1, length(var_order)),
-            X4 = rep(1, length(var_order)),
-            X5 = rep(1, length(var_order)),
-            stringsAsFactors = FALSE
-          )
-
-          # Fill X1..X4 from multinom CI odds ratios where available.
-          for (ii in seq_along(var_order)) {
-            v <- var_order[ii]
-            if (!v %in% colnames(odds_ci)) next
-            vals <- odds_ci[, v]
-            # Place values into X1..X4 according to the mapped class rows.
-            for (rr in seq_along(vals)) {
-              pos <- cls_map[rr]
-              out[ii, paste0("X", pos)] <- vals[rr]
-            }
-          }
-
-          # Fill X5 from binomial odds ratios (or override with scalar/vector).
-          if (!is.null(x5_override)) {
-            out$X5 <- x5_override
-          } else {
-            out$X5 <- ifelse(var_order %in% names(EXPcol), EXPcol[var_order], 1)
-          }
-
-          # Final clamp (defensive): guarantee no NA/Inf make it downstream.
-          for (cc in c("X1", "X2", "X3", "X4", "X5")) {
-            out[[cc]][!is.finite(out[[cc]])] <- 1
-          }
-
-          out
-        }
-
-        vars_main <- c(
-          "one_Play", "two_Play", "three_Play", "four_Play", "five_Play",
-          "one_Show", "two_Show", "three_Show", "four_Show", "five_Show",
-          "one_RA", "two_RA", "three_RA", "four_RA", "five_RA"
-        )
-        vars_pref <- c("one_Preferred", "two_Preferred", "three_Preferred", "four_Preferred", "five_Preferred")
-
-        weightedEEs_part <- make_block(vars_main)
-        cantride_part <- make_block("cantgeton", x5_override = 1)
-        pref_part <- make_block(vars_pref)
-
-        list(weightedEEs = weightedEEs_part, cantride = cantride_part, pref = pref_part)
-      }
-
-      # Match your original CI labels exactly:
-      # - MK: level=0.995  -> 99.75% ~ "99.8 %"
-      # - EP: level=0.99   -> 99.5%  -> "99.5 %"
-      # - DHS: level=0.80  -> 90%    -> "90 %"
-      # - DAK: level=0.70  -> 15% (lower tail) -> "15 %"
-      mk <- build_park_weights(1, ci_p = 0.9975, ci_label = "99.8 %")
-      ep <- build_park_weights(2, ci_p = 0.995, ci_label = "99.5 %")
-      dhs <- build_park_weights(3, ci_p = 0.90, ci_label = "90 %")
-      dak <- build_park_weights(4, ci_p = 0.15, ci_label = "15 %")
-
-      weightedEEs <- rbind(mk$weightedEEs, ep$weightedEEs, dhs$weightedEEs, dak$weightedEEs)
-      cantride2 <- data.frame(FY = yearauto, rbind(mk$cantride, ep$cantride, dhs$cantride, dak$cantride))
-
-      weightsPref1 <- mk$pref
-      weightsPref2 <- ep$pref
-      weightsPref3 <- dhs$pref
-      weightsPref4 <- dak$pref
+      # Animal Kingdom Weights
+      weights_ak <- weights[weights$Park == 4 & weights$FY == yearauto, ]
+      test <- multinom(ovpropex ~ cantgeton + one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_ak)
+      odds <- exp(confint(test, level = 0.70))
+      z1 <- apply(odds, 3L, c)
+      z2 <- expand.grid(dimnames(odds)[1:2])
+      jz <- glm((ovpropex == 5) ~ one_Play + two_Play + three_Play + four_Play + five_Play + one_Show + two_Show + three_Show + four_Show + five_Show + one_RA + two_RA + three_RA + four_RA + five_RA + one_Preferred + two_Preferred + three_Preferred + four_Preferred + five_Preferred, data = weights_ak, family = "binomial")
+      EXPcol <- exp(jz$coefficients[-1])
+      weightedEEs_AK <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "15 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][1:15, ], X5 = EXPcol[1:15])
+      weightedEEs_AK[weightedEEs_AK$Var1 == "five_Play", 3:7] <- weightedEEs_AK[weightedEEs_AK$Var1 == "five_Play", 3:7] * 1
+      weightedEEs_AK[weightedEEs_AK$Var1 == "five_Show", 3:7] <- weightedEEs_AK[weightedEEs_AK$Var1 == "five_Show", 3:7] * 1
+      weightedEEs <- rbind(weightedEEs, weightedEEs_AK)
+      weightedEEs2 <- data.frame(FY = yearauto, weightedEEs)
+      cantride_AK <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "15 %" & data.frame(z2, z1)$Var1 == "cantgeton"), ], X5 = rep(1, 1))
+      cantride2 <- data.frame(FY = yearauto, rbind(cantride, cantride_AK))
+      weightsPref4 <- data.frame(data.frame(z2, z1)[which(data.frame(z2, z1)$Var2 == "15 %" & data.frame(z2, z1)$Var1 != "(Intercept)" & data.frame(z2, z1)$Var1 != "Attend" & data.frame(z2, z1)$Var1 != "cantgeton"), ][16:20, ], X5 = EXPcol[16:20])
 
       weights22 <- rbind(weightedEEs, weightsPref1, weightsPref2, weightsPref3, weightsPref4)
-      CantRideWeight22 <- cantride2[, -1, drop = FALSE]
+      CantRideWeight22 <- cantride2[, -1]
+      if (verbose) print(weights22)
 
-      # --- From here down is fully optimized replacement for the giant loop/aggregate section ---
+      #The weights above (weightedEEs) are now multiplied to the experience data so we can convert the data into overall excellent experiences
+      #The Cant Ride weights are a separate weight for Guests that wanted to ride but couldnt.  Think of these weights as runs against our team
 
-      # Prep
+      SurveyData <- SurveyData[SurveyData$fiscal_quarter == FQ, ]
+      names(SurveyData) <- tolower(names(SurveyData))
+
+      FY <- yearauto
+      SurveyData[is.na(SurveyData)] <- 0
+      SurveyData <- cbind(SurveyData, FY)
+
       metadata$POG[(metadata$Type == "Show" & is.na(metadata$POG) | metadata$Type == "Play" & is.na(metadata$POG))] <- 0
       metadata <- metadata[!is.na(metadata$Category1) | metadata$Type == "Ride", ]
 
       SurveyData22 <- SurveyData
       CountData22 <- SurveyData22
 
-      # Normalize metadata columns for consistent matching
       metadata[, 2] <- tolower(metadata[, 2])
-      if (ncol(metadata) >= 3) metadata[, 3] <- tolower(metadata[, 3])
-      if (ncol(metadata) >= 18) metadata[, 18] <- tolower(metadata[, 18])
-      if (ncol(metadata) >= 19) metadata[, 19] <- tolower(metadata[, 19])
+      metadata[, 3] <- tolower(metadata[, 3])
+      metadata[, 18] <- tolower(metadata[, 18])
+      metadata[, 19] <- tolower(metadata[, 19])
 
-      # (A) Ride-again fix (same as your loop, vectorized per-column still ok)
-      rideagain_fix <- metadata[, 3]
-      rideexp_fix <- metadata[, 2]
-      rideagain <- rideagain_fix[!is.na(rideagain_fix)]
-      rideexp <- rideexp_fix[!is.na(rideagain_fix)]
-      if (length(rideagain)) {
-        for (i in seq_along(rideagain)) {
-          if (rideexp[i] %in% names(SurveyData22) && rideagain[i] %in% names(SurveyData22)) {
-            idx <- which(SurveyData22[, rideexp[i]] != 0 & SurveyData22[, rideagain[i]] == 0)
-            if (length(idx)) SurveyData22[idx, rideagain[i]] <- 1
-          }
-        }
+      rideagain <- metadata[, 3]
+      rideexp <- metadata[!is.na(metadata[, 3]), 2]
+      rideexp_fix <- metadata[!is.na(metadata[, 2]), 2]
+
+      rideagain <- rideagain[!is.na(rideagain)]
+      rideexp <- rideexp[!is.na(rideexp)]
+      rideexp_fix <- rideexp_fix[!is.na(rideexp_fix)]
+
+      for (i in 1:length(rideagain)) {
+        SurveyData22[which(SurveyData22[, rideexp[i]] != 0 & SurveyData22[, rideagain[i]] == 0), rideagain[i]] <- 1
       }
 
-      # (B) Character how-experience gating (kept from your script)
-      charexp <- sub(".*_", "", na.omit(sub(".*charexp_", "", grep("charexp_", metadata[, 2], value = TRUE, fixed = TRUE))))
-      howexp <- paste("charhow", charexp, sep = "_")
+      ridesexp_full <- metadata[, 2]
+      ridesexp_full <- ridesexp_full[!is.na(ridesexp_full) & grepl("ridesexp_", ridesexp_full, fixed = TRUE)]
+      ridesexp <- sub("^.*ridesexp_", "", ridesexp_full)
+      ridesexp <- sub(".*_", "", ridesexp)
+
+      entexp_full <- metadata[, 2]
+      entexp_full <- entexp_full[!is.na(entexp_full) & grepl("entexp_", entexp_full, fixed = TRUE)]
+      entexp <- sub("^.*entexp_", "", entexp_full)
+      entexp <- sub(".*_", "", entexp)
+
+      charexp_full <- metadata[, 2]
+      charexp_full <- charexp_full[!is.na(charexp_full) & grepl("charexp_", charexp_full, fixed = TRUE)]
+      charexp_after_prefix <- sub("^.*charexp_", "", charexp_full)
+      howexp <- paste("charhow", charexp_after_prefix, sep = "_")
       howexp <- howexp[howexp != "charhow_NA"]
-      ch_cols <- grep("charexp_", names(SurveyData22), value = TRUE)
-      if (length(ch_cols) && length(howexp)) {
-        for (i in seq_len(min(length(ch_cols), length(howexp)))) {
-          if (howexp[i] %in% names(SurveyData22)) {
-            SurveyData22[, ch_cols[i]] <- SurveyData22[, ch_cols[i]] * as.numeric(
-              SurveyData22[, howexp[i]] < 2 | SurveyData22[, howexp[i]] == 3 | SurveyData22[, howexp[i]] == 4
-            )
-          }
-        }
+      charexp <- sub(".*_", "", charexp_after_prefix)
+
+      for (i in 1:length(charexp)) {
+        SurveyData22[, as.character(colnames(SurveyData22)[grepl("charexp_", colnames(SurveyData22))])[i]] <-
+          SurveyData22[, as.character(colnames(SurveyData22)[grepl("charexp_", colnames(SurveyData22))])[i]] *
+          as.numeric(SurveyData22[, colnames(SurveyData22) == howexp[i]] < 2 |
+                       SurveyData22[, colnames(SurveyData22) == howexp[i]] == 3 |
+                       SurveyData22[, colnames(SurveyData22) == howexp[i]] == 4)
       }
 
-      # (C) Can't-ride sentinel conversion (-1) for rides (same logic)
       rideagainx <- metadata[, 18]
-      RIDEX <- metadata[which(!is.na(metadata[, 18])), 2]
+      RIDEX <- metadata[!is.na(metadata[, 18]), 2]
       rideagainx <- tolower(rideagainx[!is.na(rideagainx)])
       RIDEX <- tolower(RIDEX[!is.na(RIDEX)])
-      if (length(RIDEX)) {
-        for (i in seq_along(RIDEX)) {
-          if (RIDEX[i] %in% names(SurveyData22) && rideagainx[i] %in% names(SurveyData22)) {
-            idx <- which(SurveyData22[, RIDEX[i]] == 0 & SurveyData22[, rideagainx[i]] == 1 & SurveyData22$ovpropex < 6)
-            if (length(idx)) SurveyData22[idx, RIDEX[i]] <- -1
+
+      for (i in 1:length(RIDEX)) {
+        SurveyData22[which(SurveyData22[, RIDEX[i]] == 0 & SurveyData22[, rideagainx[i]] == 1 & SurveyData22$ovpropex < 6), RIDEX[i]] <- -1
+      }
+
+      new_cols <- unique(c(
+        paste0(ridesexp, "2"), paste0(ridesexp, "3"),
+        paste0(entexp, "2"), paste0(entexp, "3"),
+        paste0(charexp, "2"), paste0(charexp, "3")
+      ))
+      SurveyData22[, new_cols] <- 0
+
+      idx_non_na <- which(!is.na(metadata[, 2]))
+      rideagain_fix <- metadata[, 3]
+      i <- 5
+      for (j in 1:5) {
+        for (park in 1:4) {
+          idx_pj <- which(SurveyData22$park == park & SurveyData22$ovpropex == j)
+          # Ride assignments
+          idx_ride <- which(metadata$Type[idx_non_na] == "Ride" & metadata$Park[idx_non_na] == park)
+          for (k in idx_ride) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15 + 10, j + 2]
+              }
+            }
           }
-          # IMPORTANT: apply the same -1 conversion to CountData22 so Original_RA includes can't-ride events
-          if (RIDEX[i] %in% names(CountData22) && rideagainx[i] %in% names(CountData22)) {
-            idx2 <- which(CountData22[, RIDEX[i]] == 0 & CountData22[, rideagainx[i]] == 1 & CountData22$ovpropex < 6)
-            if (length(idx2)) CountData22[idx2, RIDEX[i]] <- -1
+          # Ent assignments
+          idx_ent <- which(metadata$Type[idx_non_na] == "Play" & metadata$Park[idx_non_na] == park)
+          for (k in idx_ent) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15, j + 2]
+              }
+            }
           }
+
+          # Flaship/Anchor assignments
+          idx_flash <- which((metadata$Genre[idx_non_na] == "Flaship" | metadata$Genre[idx_non_na] == "Anchor") & metadata$Park[idx_non_na] == park)
+          for (k in idx_flash) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 5 + 60, j + 2]
+              }
+            }
+          }
+          # Show assignments
+          idx_show <- which(metadata$Type[idx_non_na] == "Show" & metadata$Genre[idx_non_na] != "Anchor" & metadata$Park[idx_non_na] == park)
+          for (k in idx_show) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15 + 5, j + 2]
+              }
+            }
+          }
+        }
+        if (verbose) print(c(i, j))
+      }
+
+      for (i in 1:4) {
+        for (j in 1:5) {
+          for (park in 1:4) {
+            idx_pj <- which(SurveyData22$park == park & SurveyData22$ovpropex == j)
+            idx_p5 <- which(SurveyData22$park == park & SurveyData22$ovpropex == 5)
+            # --- Rides ---
+            idx_ride <- which(metadata$Type == "Ride" & metadata$Park == park)
+            for (k in idx_ride) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15 + 10, j + 2]
+                }
+                # "Can't ride" assignment
+                rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+                rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
+                }
+                if (length(rows_5) > 0) {
+                  SurveyData22[rows_5, colname2] <- CantRideWeight22[park, 5 + 2] * (1 * SurveyData22[rows_5, rideexp_fix[k]])
+                  if (verbose && colname2 == "safaris3" && FQ == 4) {
+                    print(c(colname2, rideagain_fix[k]))
+                    print(weights22[i + (park - 1) * 15 + 10, j + 2])
+                    print(SurveyData22[rows, rideexp_fix[k]])
+                    print(length(rows))
+                  }
+                }
+              }
+            }
+
+            # --- Flaship/Anchor ---
+            idx_flash <- which((metadata$Genre == "Flaship" | metadata$Genre == "Anchor") & metadata$Park == park)
+            for (k in idx_flash) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 5 + 60, j + 2]
+                }
+                # "Can't ride" assignment
+                rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+                rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
+                }
+                if (length(rows_5) > 0) {
+                  SurveyData22[rows_5, colname2] <- CantRideWeight22[park, 5 + 2] * (1 * SurveyData22[rows_5, rideexp_fix[k]])
+                }
+              }
+            }
+
+            # --- Show ---
+            idx_show <- which(metadata$Type == "Show" & metadata$Genre != "Anchor" & metadata$Park == park)
+            for (k in idx_show) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15 + 5, j + 2]
+                }
+                # "Can't ride" assignment
+                rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+                rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
+                }
+                if (length(rows_5) > 0) {
+                  SurveyData22[rows_5, colname2] <- CantRideWeight22[park, 5 + 2] * (1 * SurveyData22[rows_5, rideexp_fix[k]])
+                }
+              }
+            }
+
+            # --- Play ---
+            idx_play <- which(metadata$Type == "Play" & metadata$Park == park)
+            for (k in idx_play) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15, j + 2]
+                }
+                # "Can't ride" assignment
+                rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+                rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
+                }
+                if (length(rows_5) > 0) {
+                  SurveyData22[rows_5, colname2] <- CantRideWeight22[park, 5 + 2] * (1 * SurveyData22[rows_5, rideexp_fix[k]])
+                }
+              }
+            }
+          }
+          if (verbose) print(c(i, j))
         }
       }
 
-      # (D) Apply weights (fast) and build CountData (fast)
-      SurveyData22 <- apply_weights_fast(SurveyData22, metadata = metadata, weights22 = weights22, CantRideWeight22 = CantRideWeight22, FQ = FQ)
-      CountData22 <- apply_counts_fast(CountData22, metadata = metadata, FQ = FQ)
+      # ---- Block 7: fast aggregation of runs/against (weighted) ----
+      # Build mapping from metadata variable to short "base" (e.g., safaris -> safaris2/safaris3)
+      meta_var <- as.character(metadata[, 2])
+      meta_map <- data.table(
+        Park = metadata$Park,
+        Type = metadata$Type,
+        Category1 = metadata$Category1,
+        base = sub(".*_", "", sub(".*(ridesexp_|entexp_|charexp_)", "", meta_var))
+      )
+      meta_map <- meta_map[!is.na(Park) & !is.na(Type) & !is.na(base) & base != ""]
 
-      # (E) Summaries (fast)
-      ride_bases <- unique(.base_name(tolower(metadata$Variable[metadata$Type == "Ride"])))
-      ride_bases <- ride_bases[!is.na(ride_bases) & ride_bases != ""]
+      ride_bases <- unique(meta_map[Type == "Ride", base])
+      show_map <- unique(meta_map[Type == "Show" & !is.na(Category1), .(Park, base, Category1)])
+      play_map <- unique(meta_map[Type == "Play" & !is.na(Category1), .(Park, base, Category1)])
+      show_names <- unique(show_map$Category1)
+      play_names <- unique(play_map$Category1)
 
-      Ride_Runs20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(SurveyData22, ride_bases, "2"))
-      Ride_Against20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(SurveyData22, ride_bases, "3"))
-      Ride_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(CountData22, ride_bases, "2"))
-      Ride_OriginalAgainst20 <- as_Park_LifeStage_QTR(summarize_wide_by_group(CountData22, ride_bases, "3"))
+      agg_by_base <- function(dt, bases, suffix, skeleton, all_bases) {
+        cols <- paste0(bases, suffix)
+        cols <- cols[cols %in% names(dt)]
 
-      # Strip the suffix so Ride NAMEs match EARS taxonomy keys.
-      Ride_Runs20 <- strip_measure_suffix(Ride_Runs20, "2")
-      Ride_Against20 <- strip_measure_suffix(Ride_Against20, "3")
-      Ride_OriginalRuns20 <- strip_measure_suffix(Ride_OriginalRuns20, "2")
-      Ride_OriginalAgainst20 <- strip_measure_suffix(Ride_OriginalAgainst20, "3")
-
-      Show_Runs20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "2"))
-      Show_Against20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Show", suffix = "3"))
-      Show_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Show", suffix = "2"))
-      Show_OriginalAgainst20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Show", suffix = "3"))
-
-      Play_Runs20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Play", suffix = "2"))
-      Play_Against20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(SurveyData22, metadata, type = "Play", suffix = "3"))
-      Play_OriginalRuns20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Play", suffix = "2"))
-      Play_OriginalAgainst20 <- as_Park_LifeStage_QTR(summarize_category_wide_by_group(CountData22, metadata, type = "Play", suffix = "3"))
-
-      # ==================================================================================
-      # Keep your downstream wRAA/EARS computation logic here (melt -> wRAA_Table -> merge EARS -> EARSx).
-      # You can reuse your exact code, just swap in these objects:
-      # - Ride_Runs20, Ride_Against20, Ride_OriginalRuns20, Ride_OriginalAgainst20
-      # - Show_Runs20, Show_Against20, Show_OriginalRuns20, Show_OriginalAgainst20
-      # - Play_Runs20, Play_Against20, Play_OriginalRuns20, Play_OriginalAgainst20
-      # ==================================================================================
-      # =========================
-      # Build wRAA_Table + EARS (embedded from your original logic)
-      # =========================
-
-      # Robust builder: avoids fragile `[, -c(1:4)]` assumptions when measure columns are absent.
-      build_long_block <- function(orig_rs, orig_ra, w_rs, w_ra, genre) {
-        ids <- c("Park", "LifeStage", "QTR")
-        # If there are no measure columns, return empty block.
-        if (ncol(orig_rs) <= length(ids) || ncol(orig_ra) <= length(ids) || ncol(w_rs) <= length(ids) || ncol(w_ra) <= length(ids)) {
-          return(data.frame(Park = integer(0), LifeStage = integer(0), QTR = integer(0), NAME = character(0),
-                            Original_RS = numeric(0), Original_RA = numeric(0), wEE = numeric(0), wEEx = numeric(0),
-                            Genre = character(0)))
+        out <- copy(as.data.table(skeleton))
+        if (length(cols) > 0) {
+          bases2 <- sub(paste0(suffix, "$"), "", cols)
+          tmp <- dt[, c("park", "newgroup", "fiscal_quarter", cols), with = FALSE]
+          setnames(tmp, cols, bases2)
+          tmp_out <- tmp[, lapply(.SD, sum, na.rm = TRUE),
+                         by = .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter),
+                         .SDcols = bases2]
+          out <- merge(out, tmp_out, by = c("Park", "LifeStage", "QTR"), all.x = TRUE)
         }
 
-        m1 <- reshape2::melt(orig_rs, id = ids)
-        m2 <- reshape2::melt(orig_ra, id = ids)
-        m3 <- reshape2::melt(w_rs, id = ids)
-        m4 <- reshape2::melt(w_ra, id = ids)
-
-        # Standardize to: Park LifeStage QTR NAME value
-        names(m1)[names(m1) == "variable"] <- "NAME"; names(m1)[names(m1) == "value"] <- "Original_RS"
-        names(m2)[names(m2) == "variable"] <- "NAME"; names(m2)[names(m2) == "value"] <- "Original_RA"
-        names(m3)[names(m3) == "variable"] <- "NAME"; names(m3)[names(m3) == "value"] <- "wEE"
-        names(m4)[names(m4) == "variable"] <- "NAME"; names(m4)[names(m4) == "value"] <- "wEEx"
-
-        key <- c(ids, "NAME")
-        out <- merge(m1, m2[, c(key, "Original_RA")], by = key, all = TRUE)
-        out <- merge(out, m3[, c(key, "wEE")], by = key, all = TRUE)
-        out <- merge(out, m4[, c(key, "wEEx")], by = key, all = TRUE)
-
-        out$Original_RS[is.na(out$Original_RS)] <- 0
-        out$Original_RA[is.na(out$Original_RA)] <- 0
-        out$wEE[is.na(out$wEE)] <- 0
-        out$wEEx[is.na(out$wEEx)] <- 0
-        out$Genre <- genre
-
-        out <- out[rowSums(out[, c("Original_RS", "Original_RA", "wEE", "wEEx")] != 0, na.rm = TRUE) > 0, ]
-        out
+        for (nm in all_bases) {
+          if (!nm %in% names(out)) out[, (nm) := 0]
+          out[is.na(get(nm)), (nm) := 0]
+        }
+        setcolorder(out, c("Park", "LifeStage", "QTR", all_bases))
+        as.data.frame(out)
       }
 
-      Ride <- build_long_block(Ride_OriginalRuns20, Ride_OriginalAgainst20, Ride_Runs20, Ride_Against20, "Ride")
-      Show <- build_long_block(Show_OriginalRuns20, Show_OriginalAgainst20, Show_Runs20, Show_Against20, "Show")
-      Play <- build_long_block(Play_OriginalRuns20, Play_OriginalAgainst20, Play_Runs20, Play_Against20, "Play")
+      agg_by_category <- function(dt, map_dt, suffix, skeleton, all_names) {
+        out <- copy(as.data.table(skeleton))
+        for (nm in all_names) out[, (nm) := 0]
+        if (nrow(map_dt) == 0) {
+          setcolorder(out, c("Park", "LifeStage", "QTR", all_names))
+          return(as.data.frame(out))
+        }
 
-      # Clean up Play junk names (kept from your original)
-      if (nrow(Play)) {
-        Play <- Play[Play$NAME != "Park.1" & Play$NAME != "LifeStage.1" & Play$NAME != "QTR.1", ]
+        cols <- unique(paste0(map_dt$base, suffix))
+        cols <- cols[cols %in% names(dt)]
+        if (length(cols) == 0) {
+          setcolorder(out, c("Park", "LifeStage", "QTR", all_names))
+          return(as.data.frame(out))
+        }
+
+        dt_sub <- dt[, c("park", "newgroup", "fiscal_quarter", cols), with = FALSE]
+        long <- data.table::melt(
+          dt_sub,
+          id.vars = c("park", "newgroup", "fiscal_quarter"),
+          measure.vars = cols,
+          variable.name = "col",
+          value.name = "value",
+          variable.factor = FALSE
+        )
+        long[, base := sub(paste0(suffix, "$"), "", col)]
+
+        map2 <- unique(as.data.table(map_dt)[, .(park = Park, base, NAME = Category1)])
+        long <- merge(long, map2, by = c("park", "base"), all = FALSE)
+
+        grp <- long[, .(value = sum(value, na.rm = TRUE)),
+                    by = .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter, NAME)]
+        wide <- data.table::dcast(grp, Park + LifeStage + QTR ~ NAME, value.var = "value", fill = 0)
+        wide <- merge(out[, .(Park, LifeStage, QTR)], wide, by = c("Park", "LifeStage", "QTR"), all.x = TRUE)
+
+        for (nm in all_names) {
+          if (!nm %in% names(wide)) wide[, (nm) := 0]
+          wide[is.na(get(nm)), (nm) := 0]
+        }
+        setcolorder(wide, c("Park", "LifeStage", "QTR", all_names))
+        as.data.frame(wide)
       }
 
-      wRAA_Table <- rbind(Ride, Show, Play)
+      dtw <- as.data.table(SurveyData22)
+      skeleton_w <- unique(dtw[, .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter)])
 
-      
-library(dplyr)
-library(sqldf)
-twox<-wRAA_Table %>% group_by(NAME, Park, Genre, QTR, LifeStage) %>% mutate(Original_RS=sum(Original_RS), Original_RA=sum(Original_RA),wEE=sum(wEE), wEEx = sum(wEEx)) %>% distinct(.keep_all = FALSE)
+      Ride_Runs20 <- agg_by_base(dtw, ride_bases, "2", skeleton_w, ride_bases)
+      Ride_Against20 <- agg_by_base(dtw, ride_bases, "3", skeleton_w, ride_bases)
+      Show_Runs20 <- agg_by_category(dtw, show_map, "2", skeleton_w, show_names)
+      Show_Against20 <- agg_by_category(dtw, show_map, "3", skeleton_w, show_names)
+      Play_Runs20 <- agg_by_category(dtw, play_map, "2", skeleton_w, play_names)
+      Play_Against20 <- agg_by_category(dtw, play_map, "3", skeleton_w, play_names)
+      # ---- end block 7 (weighted) ----
 
-onex<-twox %>% group_by(NAME,Park, QTR) %>% mutate(sum = sum(Original_RS+Original_RA) )
-onex$Percent<- (onex$Original_RS+onex$Original_RA)/onex$sum
-wRAA_Table<- sqldf('select a.*,b.Percent from twox a left join onex b on a.Park = b.Park and a.QTR=b.QTR and a.LifeStage = b.LifeStage and a.Name = b.Name')
+      ############################################################################################
+      # Now that we have the weighted data we need the raw counts for our weighted metric
+      # CountData = Raw
+      # SurveyData = Weighted
+      ############################################################################################
 
+      CountData22 <- SurveyData22
 
-wRAA_Table<-wRAA_Table[!is.na(wRAA_Table$Park), ]
+      for (i in 1:length(RIDEX)) {
+        CountData22[which(CountData22[, RIDEX[i]] == 0 & CountData22[, rideagainx[i]] == 1 & CountData22$ovpropex < 6), RIDEX[i]] <- -1
+      }
 
-#wRAA_Table$wEEx[wRAA_Table$wEEx>2000]<-wRAA_Table$Original_RA[wRAA_Table$wEEx>2000] I could probably change this to all parks scale maybe
-wRAA_Table<-cbind(wRAA_Table, wOBA = wRAA_Table$wEE/ (wRAA_Table$Original_RS+ wRAA_Table$Original_RA) )
+      CountData22[, new_cols] <- 0
 
-wRAA_Table<-merge(x=wRAA_Table, y =aggregate( wRAA_Table$Original_RS, by=list( QTR=wRAA_Table$QTR,Park = wRAA_Table$Park), FUN=sum), by = c("QTR", "Park"), all.x = TRUE)
-names(wRAA_Table)[length(names(wRAA_Table))]<-"OBP1"
-wRAA_Table<-merge(x=wRAA_Table, y =aggregate( wRAA_Table$Original_RA, by=list( QTR=wRAA_Table$QTR,Park = wRAA_Table$Park), FUN=sum), by = c("QTR", "Park"), all.x = TRUE)
-names(wRAA_Table)[length(names(wRAA_Table))]<-"OBP2"
-#Calculating an "On Base Average"  More Guest's on base means higher chance of scoring
-    wRAA_Table$OBP<-wRAA_Table$OBP1/(wRAA_Table$OBP1+wRAA_Table$OBP2)
+      idx_non_na <- which(!is.na(metadata[, 2]))
+      rideagain_fix <- metadata[, 3]
+      i <- 5
+      for (j in 1:5) {
+        for (park in 1:4) {
+          idx_pj <- which(CountData22$park == park & CountData22$ovpropex == j)
+          # Ride assignments
+          idx_ride <- which(metadata$Type[idx_non_na] == "Ride" & metadata$Park[idx_non_na] == park)
+          for (k in idx_ride) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                CountData22[rows, colname2] <- 1
+              }
+            }
+          }
+          # Ent assignments
+          idx_ent <- which(metadata$Type[idx_non_na] == "Play" & metadata$Park[idx_non_na] == park)
+          for (k in idx_ent) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                CountData22[rows, colname2] <- 1
+              }
+            }
+          }
 
-wRAA_Table<-merge(x = wRAA_Table, y = aggregate( wRAA_Table$wOBA, by=list( QTR=wRAA_Table$QTR,Park = wRAA_Table$Park), FUN=median), by = c("QTR", "Park"), all.x = TRUE)
-names(wRAA_Table)[length(names(wRAA_Table))]<-"wOBA_Park"
-#Scaling it to the park
-    wRAA_Table<-data.frame(wRAA_Table,wOBA_Scale = wRAA_Table$wOBA_Park/wRAA_Table$OBP)
+          # Flaship/Anchor assignments
+          idx_flash <- which((metadata$Genre[idx_non_na] == "Flaship" | metadata$Genre[idx_non_na] == "Anchor") & metadata$Park[idx_non_na] == park)
+          for (k in idx_flash) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                CountData22[rows, colname2] <- 1
+              }
+            }
+          }
+          # Show assignments
+          idx_show <- which(metadata$Type[idx_non_na] == "Show" & metadata$Genre[idx_non_na] != "Anchor" & metadata$Park[idx_non_na] == park)
+          for (k in idx_show) {
+            if (!is.na(rideexp_fix[k])) {
+              colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
+              rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+              if (length(rows) > 0) {
+                CountData22[rows, colname2] <- 1
+              }
+            }
+          }
+        }
+        if (verbose) print(c(i, j))
+      }
 
-        EARS <- dkuReadDataset("EARS_Taxonomy")
+      for (i in 1:4) {
+        for (j in 1:5) {
+          for (park in 1:4) {
+            idx_pj <- which(CountData22$park == park & CountData22$ovpropex == j)
+            idx_p5 <- which(CountData22$park == park & CountData22$ovpropex == 5)
+            # --- Rides ---
+            idx_ride <- which(metadata$Type == "Ride" & metadata$Park == park)
+            for (k in idx_ride) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  CountData22[rows, colname2] <- 1
+                }
+                rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
+                }
+                rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_5) > 0) {
+                  CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
+                }
+              }
+            }
 
-join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
-# Remove duplicate columns from table2 except join keys
-table2_nodup <- EARS[, setdiff(names(EARS), setdiff(names(wRAA_Table), join_keys))]
+            # --- Flaship/Anchor ---
+            idx_flash <- which((metadata$Genre == "Flaship" | metadata$Genre == "Anchor") & metadata$Park == park)
+            for (k in idx_flash) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  CountData22[rows, colname2] <- 1
+                }
+                rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
+                }
+                rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_5) > 0) {
+                  CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
+                }
+              }
+            }
 
-# Merge, keeping only columns from table1 and non-duplicate columns from table2
-EARSFinal_Final <- merge(wRAA_Table, table2_nodup, by = join_keys, all = FALSE)
-#####################################################################################################
-#Now that testing/parametrization is complete we will add in the guest carried and recalculate ears for the quarter
-#This requires POG*Attendance for experiences without a Guest Carried.
-#Guest Carried are collected from IE
+            # --- Show ---
+            idx_show <- which(metadata$Type == "Show" & metadata$Genre != "Anchor" & metadata$Park == park)
+            for (k in idx_show) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  CountData22[rows, colname2] <- 1
+                }
+                rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
+                }
+                rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_5) > 0) {
+                  CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
+                }
+              }
+            }
 
-#####################################################################################################
-EARSx<-EARSFinal_Final
-        EARSx$wRAA<-((EARSx$wOBA - EARSx$wOBA_Park)/EARSx$wOBA_Scale)*(EARSx$wRAA_Table.AnnualGuestsCarried)
-EARSx$EARS<- EARSx$wRAA/ EARSx$RPW
+            # --- Play ---
+            idx_play <- which(metadata$Type == "Play" & metadata$Park == park)
+            for (k in idx_play) {
+              if (!is.na(rideexp_fix[k])) {
+                colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
+                rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+                if (length(rows) > 0) {
+                  CountData22[rows, colname2] <- 1
+                }
+                rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
+                if (length(rows_j) > 0) {
+                  CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
+                }
+                rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
+                if (length(rows_5) > 0) {
+                  CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
+                }
+              }
+            }
+          }
+          if (verbose) print(c(i, j))
+        }
+      }
 
-EARSx$EARS<-    (EARSx$EARS+EARSx$replacement)*EARSx$p
-    print(unique(EARSx$QTR))
-EARSTotal<-rbind(EARSTotal,EARSx)
-    
-#EARSTotal<-sqldf('select a.*, b.EARS as Actual from EARSTotal a left join EARS b on a.NAME = b.NAME and
-#a.Park = b.Park and  a.QTR = b.QTR and a.LifeStage=b.LifeStage')
+      # ---- Block 7: fast aggregation of runs/against (original) ----
+      dto <- as.data.table(CountData22)
+      skeleton_o <- unique(dto[, .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter)])
 
-FQ<-FQ+1
-   }
+      Ride_OriginalRuns20 <- agg_by_base(dto, ride_bases, "2", skeleton_o, ride_bases)
+      Ride_OriginalAgainst20 <- agg_by_base(dto, ride_bases, "3", skeleton_o, ride_bases)
+      Show_OriginalRuns20 <- agg_by_category(dto, show_map, "2", skeleton_o, show_names)
+      Show_OriginalAgainst20 <- agg_by_category(dto, show_map, "3", skeleton_o, show_names)
+      Play_OriginalRuns20 <- agg_by_category(dto, play_map, "2", skeleton_o, play_names)
+      Play_OriginalAgainst20 <- agg_by_category(dto, play_map, "3", skeleton_o, play_names)
+      # ---- end block 7 (original) ----
 
-EARS$Actual_EARS<-EARS$EARS
-library(dplyr)
+      ############################################################################################
+      # END OF WEIGHTING NOW WE HAVE TO COMBINE EVERYTHING TO MAKE THE STATISTIC
+      ############################################################################################
 
+      Show_OriginalRuns <- rbind(Show_OriginalRuns20)
+      Show_OriginalAgainst <- rbind(Show_OriginalAgainst20)
+      Show_Runs <- rbind(Show_Runs20)
+      Show_Against <- rbind(Show_Against20)
 
-# Full join, then keep only id and var1
-result <- full_join(EARSTotal, EARS[,c("NAME","Park","Genre","QTR","LifeStage", "Actual_EARS")], by = c("NAME","Park","Genre","QTR","LifeStage")) 
-  #select(c("NAME","Park","QTR","LifeStage"), EARS,Actual_EARS)
+      one <- reshape2::melt(Show_OriginalRuns, id = (c("Park", "LifeStage", "QTR")))
+      two <- reshape2::melt(Show_OriginalAgainst, id = (c("Park", "LifeStage", "QTR")))
+      three <- reshape2::melt(Show_Runs, id = (c("Park", "LifeStage", "QTR")))
+      four <- reshape2::melt(Show_Against, id = (c("Park", "LifeStage", "QTR")))
 
-result$EARS[is.na(result$EARS)]<-0
+      Show <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
+      Show <- Show[!is.na(Show$Park), ]
+      Show <- unique(Show[apply(Show != 0, 1, all), ])
+      names(Show) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
+
+      Play_OriginalRuns <- rbind(Play_OriginalRuns20)
+      Play_OriginalAgainst <- rbind(Play_OriginalAgainst20)
+      Play_Runs <- rbind(Play_Runs20)
+      Play_Against <- rbind(Play_Against20)
+
+      one <- reshape2::melt(Play_OriginalRuns, id = (c("Park", "LifeStage", "QTR")))
+      two <- reshape2::melt(Play_OriginalAgainst, id = (c("Park", "LifeStage", "QTR")))
+      three <- reshape2::melt(Play_Runs, id = (c("Park", "LifeStage", "QTR")))
+      four <- reshape2::melt(Play_Against, id = (c("Park", "LifeStage", "QTR")))
+
+      Play <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
+      Play <- unique(Play[apply(Play != 0, 1, all), ])
+      names(Play) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
+      Play <- Play[Play$NAME != "Park.1", ]
+      Play <- Play[Play$NAME != "LifeStage.1", ]
+      Play <- Play[Play$NAME != "QTR.1", ]
+
+      Ride_OriginalRuns <- rbind(Ride_OriginalRuns20)
+      Ride_OriginalAgainst <- rbind(Ride_OriginalAgainst20)
+      Ride_Runs <- rbind(Ride_Runs20)
+      Ride_Against <- rbind(Ride_Against20)
+
+      one <- reshape2::melt(Ride_OriginalRuns, id = (c("Park", "LifeStage", "QTR")))
+      two <- reshape2::melt(Ride_OriginalAgainst, id = (c("Park", "LifeStage", "QTR")))
+      three <- reshape2::melt(Ride_Runs, id = (c("Park", "LifeStage", "QTR")))
+      four <- reshape2::melt(Ride_Against, id = (c("Park", "LifeStage", "QTR")))
+
+      Ride <- cbind(one, two[, -c(1:4)], three[, -c(1:4)], four[, -c(1:4)])
+      Ride <- unique(Ride[apply(Ride != 0, 1, all), ])
+      names(Ride) <- c("Park", "LifeStage", "QTR", "NAME", "Original_RS", "Original_RA", "wEE", "wEEx")
+
+      wRAA_Table <- data.frame(Ride, Genre = "Ride")
+      Show$Genre <- "Show"
+      Play$Genre <- "Play"
+      wRAA_Table <- rbind(wRAA_Table, Show, Play)
+
+      twox <- wRAA_Table %>% group_by(NAME, Park, Genre, QTR, LifeStage) %>% mutate(Original_RS = sum(Original_RS), Original_RA = sum(Original_RA), wEE = sum(wEE), wEEx = sum(wEEx)) %>% distinct(.keep_all = FALSE)
+      onex <- twox %>% group_by(NAME, Park, QTR) %>% mutate(sum = sum(Original_RS + Original_RA))
+      onex$Percent <- (onex$Original_RS + onex$Original_RA) / onex$sum
+      wRAA_Table <- sqldf("select a.*,b.Percent from twox a left join onex b on a.Park = b.Park and a.QTR=b.QTR and a.LifeStage = b.LifeStage and a.Name = b.Name")
+
+      wRAA_Table <- wRAA_Table[!is.na(wRAA_Table$Park), ]
+      wRAA_Table <- cbind(wRAA_Table, wOBA = wRAA_Table$wEE / (wRAA_Table$Original_RS + wRAA_Table$Original_RA))
+
+      wRAA_Table <- merge(x = wRAA_Table, y = aggregate(wRAA_Table$Original_RS, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = sum), by = c("QTR", "Park"), all.x = TRUE)
+      names(wRAA_Table)[length(names(wRAA_Table))] <- "OBP1"
+      wRAA_Table <- merge(x = wRAA_Table, y = aggregate(wRAA_Table$Original_RA, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = sum), by = c("QTR", "Park"), all.x = TRUE)
+      names(wRAA_Table)[length(names(wRAA_Table))] <- "OBP2"
+      wRAA_Table$OBP <- wRAA_Table$OBP1 / (wRAA_Table$OBP1 + wRAA_Table$OBP2)
+
+      wRAA_Table <- merge(x = wRAA_Table, y = aggregate(wRAA_Table$wOBA, by = list(QTR = wRAA_Table$QTR, Park = wRAA_Table$Park), FUN = median), by = c("QTR", "Park"), all.x = TRUE)
+      names(wRAA_Table)[length(names(wRAA_Table))] <- "wOBA_Park"
+      wRAA_Table <- data.frame(wRAA_Table, wOBA_Scale = wRAA_Table$wOBA_Park / wRAA_Table$OBP)
+
+      join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
+      table2_nodup <- EARS[, setdiff(names(EARS), setdiff(names(wRAA_Table), join_keys))]
+      EARSFinal_Final <- merge(wRAA_Table, table2_nodup, by = join_keys, all = FALSE)
+
+      EARSx <- EARSFinal_Final
+      EARSx$wRAA <- ((EARSx$wOBA - EARSx$wOBA_Park) / EARSx$wOBA_Scale) * (EARSx$wRAA_Table.AnnualGuestsCarried)
+      EARSx$EARS <- EARSx$wRAA / EARSx$RPW
+      EARSx$EARS <- (EARSx$EARS + EARSx$replacement) * EARSx$p
+      if (verbose) print(unique(EARSx$QTR))
+      EARSTotal <- rbind(EARSTotal, EARSx)
+
+      FQ <- FQ + 1
+    }
+
+    EARS$Actual_EARS <- EARS$EARS
+    result <- full_join(EARSTotal, EARS[, c("NAME", "Park", "Genre", "QTR", "LifeStage", "Actual_EARS")], by = c("NAME", "Park", "Genre", "QTR", "LifeStage"))
+    result$EARS[is.na(result$EARS)] <- 0
     colnames(result)[colnames(result) == "EARS"] <- "Simulation_EARS"
-
-result$Incremental_EARS<-result$Simulation_EARS-result$Actual_EARS 
-EARSTotal <- result
- 
-EARSTotal$sim_run <- run
-EARSTotal
+    result$Incremental_EARS <- result$Simulation_EARS - result$Actual_EARS
+    EARSTotal2 <- result
+    EARSTotal2$sim_run <- run
+    EARSTotal2
   }
-
-  run_results <- future.apply::future_lapply(
-    X = seq_len(as.integer(n_runs)),
-    FUN = run_one,
-    future.seed = TRUE,
-    future.packages = c("data.table", "dplyr", "nnet", "sqldf", "reshape2")
-  )
-
-  EARSTotal_list <- data.table::rbindlist(run_results, fill = TRUE)
 
   Simulation_Results <- EARSTotal_list
-
-  if (!is.null(output_dataset)) {
-    try(dkuWriteDataset(output_dataset, Simulation_Results), silent = TRUE)
-  }
-
   Simulation_Results
 }
 
@@ -1156,10 +894,10 @@ server <- function(input, output, session) {
     }) |> setNames(selected_exps)
   }
  
-  # Simulation runner (fully embedded in this server.R via run_simulation_dataiku()).
+  # Simulation runner (fully embedded in this server.R via run_simulation_simR_embedded()).
   # This avoids any dependency on external R files at Shiny runtime.
   run_simulation <- function(park, exp_name, exp_date_ranges, n_runs, num_cores) {
-    run_simulation_dataiku(
+    run_simulation_simR_embedded(
       n_runs = as.integer(n_runs),
       num_cores = as.integer(num_cores),
       yearauto = 2024L,
@@ -1167,7 +905,7 @@ server <- function(input, output, session) {
       exp_name = exp_name,
       exp_date_ranges = exp_date_ranges,
       maxFQ = 4L,
-      output_dataset = NULL
+      verbose = FALSE
     )
   }
  
