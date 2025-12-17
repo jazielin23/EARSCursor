@@ -1158,16 +1158,20 @@ server <- function(input, output, session) {
  
   # Thin wrapper around the optimized runner
   run_simulation <- function(park, exp_name, exp_date_ranges, n_runs, num_cores) {
-    run_simulation_dataiku(
-      n_runs = as.integer(n_runs),
-      num_cores = as.integer(num_cores),
-      yearauto = 2024L,
-      park_for_sim = as.integer(park),
-      exp_name = exp_name,
-      exp_date_ranges = exp_date_ranges,
-      maxFQ = 4L,
-      output_dataset = NULL
-    )
+    # Drive the simulation via Sim.R (cluster/foreach implementation).
+    # Run it in an isolated environment so it doesn't pollute the Shiny session.
+    sim_env <- new.env(parent = globalenv())
+    sim_env$n_runs <- as.integer(n_runs)
+    sim_env$num_cores <- as.integer(num_cores)
+    sim_env$yearauto <- 2024L
+    sim_env$park_for_sim <- as.integer(park)
+    sim_env$exp_name <- exp_name
+    sim_env$exp_date_ranges <- exp_date_ranges
+    sim_env$maxFQ <- 4L
+    sim_env$verbose <- FALSE
+
+    source("Sim.R", local = sim_env)
+    sim_env$Simulation_Results
   }
  
   # ---- Experience selector UI ----
