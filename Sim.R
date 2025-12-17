@@ -130,26 +130,20 @@ QTRLY_GC <- QTRLY_GC_new
 SurveyData<-SurveyData[SurveyData$fiscal_quarter==FQ,]
 
     #This code is for setting up the Pecent of Gate (POG) calculation for things with no Guest Carried
-k<-1
-name<-NULL
-park<-NULL
-expd<-NULL
-while(k <length(meta_prepared$Variable)+1){
-eddie<-sub(".*_","",unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split=c( 'charexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'ridesexp_'), fixed=TRUE))[1])
-pahk<-gsub("_.*","",unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split=c( 'charexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'ridesexp_'), fixed=TRUE))[1])
-if(pahk == "dak"){pahk<-4}
-    if(pahk == "mk"){pahk<-1}
-    if(pahk == "ec"){pahk<-2}
-    if(pahk == "dhs"){pahk<-3}
+vars <- meta_prepared$Variable
+base_var <- sub(".*(charexp_|entexp_|ridesexp_)", "", vars)
+name <- sub(".*_", "", base_var)
+pahk_str <- sub("_.*", "", base_var)
+park_map <- c(mk = 1, ec = 2, dhs = 3, dak = 4)
+park <- unname(park_map[pahk_str])
 
+# NOTE: preserve existing behavior (numerator is not park-filtered)
+num <- colSums(SurveyData[, vars, drop = FALSE] > 0, na.rm = TRUE)
+denom_by_park <- table(SurveyData$park)
+den <- as.numeric(denom_by_park[as.character(park)])
+expd <- num / den
 
-    expd1<-sum(SurveyData[,meta_prepared$Variable[k]] >0 , na.rm=TRUE)/nrow(SurveyData[SurveyData$park == pahk,])
-    name<-append(name,eddie)
-    park<-append(park,pahk)
-    expd<-append(expd,expd1)
-   k<-k+1
-    }
-meta_preparedPOG<-data.frame(name,Park=park,POG=meta_prepared$POG,expd)
+meta_preparedPOG <- data.frame(name, Park = park, POG = meta_prepared$POG, expd)
 meta_preparedPOG
 
 AttQTR<-AttQTR[AttQTR$FQ ==FQ,]
