@@ -4,8 +4,6 @@ library(ggplot2)
 library(tidyr)
 library(dataiku)
 library(bslib)
-library(shinyWidgets)
-library(plotly)
 
 ui <- page_sidebar(
   theme = bs_theme(
@@ -84,14 +82,7 @@ ui <- page_sidebar(
       uiOutput("selected_exp_dates"),
 
       h5("Progress"),
-      progressBar(
-        id = "sim_progress",
-        value = 0,
-        total = 100,
-        display_pct = TRUE,
-        striped = TRUE,
-        animate = TRUE
-      ),
+      uiOutput("sim_status_ui"),
 
       actionButton("simulate", "Run simulation", class = "btn-primary w-100")
     )
@@ -113,13 +104,13 @@ ui <- page_sidebar(
       div(class = "plot-title", "Overall Experience Impact (bootstrap 95% CI)"),
       layout_columns(
         col_widths = c(4, 4, 4),
-        card(plotlyOutput("boxplot_park", height = 260)),
-        card(plotlyOutput("boxplot_lifestage", height = 260)),
-        card(plotlyOutput("boxplot_genre", height = 260))
+        card(uiOutput("boxplot_park_ui")),
+        card(uiOutput("boxplot_lifestage_ui")),
+        card(uiOutput("boxplot_genre_ui"))
       ),
       br(),
       div(class = "plot-title", "Cannibalization (ordered by Actuals)"),
-      card(plotlyOutput("histplot", height = 340))
+      card(uiOutput("histplot_ui"))
     ),
     nav_panel(
       "Downloads",

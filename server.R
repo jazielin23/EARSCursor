@@ -6,9 +6,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 library(scales)
-library(shinyWidgets)
 library(bslib)
-library(plotly)
  
 ## -----------------------------------------------------------------------------
 ## Embedded simulation runner (ported from Sim.R)
@@ -883,6 +881,8 @@ QTRLY_GC b on a.name=b.name and a.Park = b.Park")
  
 server <- function(input, output, session) {
  
+  has_plotly <- requireNamespace("plotly", quietly = TRUE)
+
   exp_data <- dkuReadDataset("MetaDataTool_Exp")
  
   get_exp_date_ranges <- function(input, selected_exps) {
@@ -910,17 +910,12 @@ server <- function(input, output, session) {
   output$exp_select_ui <- renderUI({
     req(input$selected_park)
     df <- exp_data[exp_data$Park == as.numeric(input$selected_park), ]
-    shinyWidgets::pickerInput(
+    selectizeInput(
       "selected_exps",
       "Select experiences",
       choices = setNames(df$name, df$Repository.Offering.Name),
       multiple = TRUE,
-      options = list(
-        `live-search` = TRUE,
-        `actions-box` = TRUE,
-        `selected-text-format` = "count > 2",
-        `none-selected-text` = "Choose one or more experiences..."
-      )
+      options = list(placeholder = "Choose one or more experiences...")
     )
   })
  
@@ -954,6 +949,27 @@ server <- function(input, output, session) {
       )
     })
   })
+
+  # ---- Lightweight status/progress UI (no shinyWidgets dependency) ----
+  sim_status <- reactiveVal(list(state = "idle", pct = 0, msg = ""))
+
+  output$sim_status_ui <- renderUI({
+    s <- sim_status()
+    state_badge <- switch(
+      s$state,
+      running = span(class = "badge text-bg-primary", "Running"),
+      done = span(class = "badge text-bg-success", "Done"),
+      error = span(class = "badge text-bg-danger", "Error"),
+      span(class = "badge text-bg-secondary", "Idle")
+    )
+
+    tagList(
+      state_badge,
+      tags$div(style = "height: 8px;"),
+      tags$progress(value = s$pct, max = 100, style = "width: 100%; height: 14px;"),
+      if (nzchar(s$msg)) tags$div(class = "text-muted", style = "margin-top: 6px; font-size: 0.95rem;", s$msg)
+    )
+  })
  
   # ---- Run simulation ----
   simulation_results <- eventReactive(input$simulate, {
@@ -962,7 +978,7 @@ server <- function(input, output, session) {
     validate(need(length(exp_name) > 0, "Select at least one experience to run the simulation."))
     exp_date_ranges <- get_exp_date_ranges(input, exp_name)
  
-    shinyWidgets::updateProgressBar(session, "sim_progress", value = 5)
+    sim_status(list(state = "running", pct = 10, msg = "Simulation started…"))
 
     withProgress(
       message = "Running simulation…",
@@ -971,16 +987,22 @@ server <- function(input, output, session) {
       {
         incProgress(0.1)
 
-        result <- run_simulation(
-          park = as.numeric(input$selected_park),
-          exp_name = exp_name,
-          exp_date_ranges = exp_date_ranges,
-          n_runs = as.numeric(input$n_runs),
-          num_cores = 5
+        result <- tryCatch(
+          run_simulation(
+            park = as.numeric(input$selected_park),
+            exp_name = exp_name,
+            exp_date_ranges = exp_date_ranges,
+            n_runs = as.numeric(input$n_runs),
+            num_cores = 5
+          ),
+          error = function(e) {
+            sim_status(list(state = "error", pct = 0, msg = conditionMessage(e)))
+            stop(e)
+          }
         )
 
         incProgress(0.85)
-        shinyWidgets::updateProgressBar(session, "sim_progress", value = 100)
+        sim_status(list(state = "done", pct = 100, msg = "Simulation complete."))
         incProgress(0.05)
         result
       }
@@ -1071,8 +1093,22 @@ server <- function(input, output, session) {
     )
   })
  
+  # ---- Plot output selectors (plotly optional) ----
+  output$histplot_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("histplot", height = 340) else plotOutput("histplot", height = 340)
+  })
+  output$boxplot_park_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 260) else plotOutput("boxplot_park", height = 260)
+  })
+  output$boxplot_lifestage_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 260) else plotOutput("boxplot_lifestage", height = 260)
+  })
+  output$boxplot_genre_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 260) else plotOutput("boxplot_genre", height = 260)
+  })
+
   # ---- Plots ----
-  output$histplot <- renderPlotly({
+  output$histplot <- (if (has_plotly) renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1123,10 +1159,10 @@ server <- function(input, output, session) {
       scale_fill_brewer(palette = "Dark2") +
       scale_y_continuous(labels = scales::percent_format(scale = 1))
 
-    plotly::ggplotly(p, tooltip = c("x", "y"))
+    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
   })
  
-  output$boxplot_park <- renderPlotly({
+  output$boxplot_park <- (if (has_plotly) renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1190,10 +1226,10 @@ server <- function(input, output, session) {
       ) +
       scale_x_continuous(labels = scales::percent_format(scale = 1))
 
-    plotly::ggplotly(p, tooltip = c("x", "y"))
+    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
   })
  
-  output$boxplot_lifestage <- renderPlotly({
+  output$boxplot_lifestage <- (if (has_plotly) renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1255,10 +1291,10 @@ server <- function(input, output, session) {
       scale_x_discrete(labels = lifestage_labels) +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    plotly::ggplotly(p, tooltip = c("x", "y"))
+    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
   })
  
-  output$boxplot_genre <- renderPlotly({
+  output$boxplot_genre <- (if (has_plotly) renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
     req("Genre" %in% names(sim_df))
@@ -1311,7 +1347,7 @@ server <- function(input, output, session) {
       scale_fill_brewer(palette = "Dark2") +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    plotly::ggplotly(p, tooltip = c("x", "y"))
+    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
   })
  
   # ---- Details table ----
