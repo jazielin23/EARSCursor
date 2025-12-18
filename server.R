@@ -884,11 +884,82 @@ server <- function(input, output, session) {
   has_plotly <- requireNamespace("plotly", quietly = TRUE)
 
   exp_data <- dkuReadDataset("MetaDataTool_Exp")
+
+  # ---- Survey date limits (used to constrain/clamp UI date ranges) ----
+  # Cache per park to avoid re-reading the dataset repeatedly.
+  survey_date_cache <- reactiveVal(list())
+
+  get_survey_date_limits <- function(park) {
+    park_key <- as.character(park)
+    cache <- survey_date_cache()
+    if (!is.null(cache[[park_key]])) return(cache[[park_key]])
+
+    lim <- tryCatch({
+      sd <- dkuReadDataset("FY24_prepared")
+      names(sd) <- tolower(names(sd))
+
+      date_col <- NULL
+      if ("visdate_parsed" %in% names(sd)) date_col <- "visdate_parsed"
+      if (is.null(date_col) && "visdate" %in% names(sd)) date_col <- "visdate"
+      if (is.null(date_col)) stop("FY24_prepared missing visdate_parsed/visdate")
+
+      if (!("park" %in% names(sd))) stop("FY24_prepared missing park column")
+
+      d <- as.Date(sd[[date_col]])
+      d <- d[sd$park == as.numeric(park) & !is.na(d)]
+      if (length(d) == 0) stop("No dates for selected park")
+
+      rng <- range(d, na.rm = TRUE)
+      list(min = rng[1], max = rng[2])
+    }, error = function(e) {
+      # Fallback: keep app usable even if dataset is unavailable at UI time
+      today <- Sys.Date()
+      list(min = today - 365, max = today)
+    })
+
+    cache[[park_key]] <- lim
+    survey_date_cache(cache)
+    lim
+  }
+
+  clamp_date_range <- function(dr, min_date, max_date) {
+    if (is.null(dr) || length(dr) != 2 || any(is.na(dr))) {
+      return(c(min_date, max_date))
+    }
+    start <- as.Date(dr[1])
+    end <- as.Date(dr[2])
+    if (is.na(start) || is.na(end)) return(c(min_date, max_date))
+
+    start <- max(min_date, min(max_date, start))
+    end <- max(min_date, min(max_date, end))
+    if (start > end) start <- end
+    c(start, end)
+  }
  
   get_exp_date_ranges <- function(input, selected_exps) {
-    lapply(selected_exps, function(exp_name) {
-      input[[paste0("daterange_", exp_name)]]
+    lim <- get_survey_date_limits(input$selected_park)
+    adjusted_any <- FALSE
+
+    out <- lapply(selected_exps, function(exp_name) {
+      dr_in <- input[[paste0("daterange_", exp_name)]]
+      dr_out <- clamp_date_range(dr_in, lim$min, lim$max)
+      if (!identical(as.Date(dr_in), as.Date(dr_out))) adjusted_any <<- TRUE
+      dr_out
     }) |> setNames(selected_exps)
+
+    if (adjusted_any) {
+      showNotification(
+        sprintf(
+          "One or more date ranges were adjusted to match available survey data (%s to %s).",
+          format(lim$min),
+          format(lim$max)
+        ),
+        type = "message",
+        duration = 6
+      )
+    }
+
+    out
   }
  
   # Simulation runner (fully embedded in this server.R via run_simulation_simR_embedded()).
@@ -936,16 +1007,31 @@ server <- function(input, output, session) {
       return(helpText("Select one or more experiences to configure date ranges."))
     }
 
+    lim <- get_survey_date_limits(input$selected_park)
+
     lapply(exps, function(exp_name) {
       exp_label <- as.character(exp_data$Repository.Offering.Name[exp_data$name == exp_name][1])
+      input_id <- paste0("daterange_", exp_name)
+      cur <- input[[input_id]]
+      # Default to last 30 days of available data
+      default_start <- max(lim$min, lim$max - 30)
+      default_end <- lim$max
+      dr <- if (is.null(cur)) c(default_start, default_end) else clamp_date_range(cur, lim$min, lim$max)
+
       bslib::tooltip(
         dateRangeInput(
-          inputId = paste0("daterange_", exp_name),
+          inputId = input_id,
           label = exp_label,
-          start = Sys.Date() - 30,
-          end = Sys.Date()
+          start = dr[1],
+          end = dr[2],
+          min = lim$min,
+          max = lim$max
         ),
-        "Only guests within this visit date range are affected for the selected experience."
+        sprintf(
+          "Dates are limited to available survey data (%s to %s).",
+          format(lim$min),
+          format(lim$max)
+        )
       )
     })
   })
