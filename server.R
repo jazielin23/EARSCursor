@@ -1166,7 +1166,7 @@ server <- function(input, output, session) {
         scale_fill_brewer(palette = "Dark2") +
         scale_y_continuous(labels = scales::percent_format(scale = 1))
 
-      plotly::ggplotly(p, tooltip = c("x", "y"))
+      plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 1150)
     })
   } else {
     output$histplot <- renderPlot({
@@ -1286,7 +1286,7 @@ server <- function(input, output, session) {
       ) +
       scale_x_continuous(labels = scales::percent_format(scale = 1))
 
-    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 900) else p
   })
  
   output$boxplot_lifestage <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
@@ -1351,7 +1351,7 @@ server <- function(input, output, session) {
       scale_x_discrete(labels = lifestage_labels) +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 800) else p
   })
  
   output$boxplot_genre <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
@@ -1407,7 +1407,7 @@ server <- function(input, output, session) {
       scale_fill_brewer(palette = "Dark2") +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 800) else p
   })
  
   # ---- Details table ----

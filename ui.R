@@ -52,6 +52,12 @@ ui <- page_sidebar(
       /* Slightly larger labels + better focus visibility */
       .form-label { font-weight: 600; }
       :focus { outline: 3px solid rgba(13,110,253,.35); outline-offset: 2px; }
+
+      /* Force larger plot container heights (Dataiku/bslib cards can constrain widgets) */
+      #boxplot_park { height: 900px !important; }
+      #boxplot_lifestage { height: 800px !important; }
+      #boxplot_genre { height: 800px !important; }
+      #histplot { height: 1150px !important; }
     '))
   ),
   title = div(
