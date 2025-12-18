@@ -890,6 +890,40 @@ server <- function(input, output, session) {
   # using the fiscal calendar table (DT) by fiscal week/day (or fiscal day-of-year).
   dt_cache <- reactiveVal(NULL)
 
+  # ---- Survey max date (FY24_prepared) ----
+  # Used to clamp the *end* of date ranges if user selects beyond available data.
+  survey_max_cache <- reactiveVal(list())
+
+  get_survey_max_date <- function(park) {
+    park_key <- as.character(park)
+    cache <- survey_max_cache()
+    if (!is.null(cache[[park_key]])) return(cache[[park_key]])
+
+    mx <- tryCatch({
+      sd <- dkuReadDataset("FY24_prepared")
+      names(sd) <- tolower(names(sd))
+
+      date_col <- NULL
+      if ("visdate_parsed" %in% names(sd)) date_col <- "visdate_parsed"
+      if (is.null(date_col) && "visdate" %in% names(sd)) date_col <- "visdate"
+      if (is.null(date_col)) stop("FY24_prepared missing visdate_parsed/visdate")
+
+      if (!("park" %in% names(sd))) stop("FY24_prepared missing park column")
+
+      d <- as.Date(sd[[date_col]])
+      d <- d[sd$park == as.numeric(park) & !is.na(d)]
+      if (length(d) == 0) stop("No dates for selected park")
+      max(d, na.rm = TRUE)
+    }, error = function(e) {
+      # Fallback: don't clamp if we can't determine max
+      as.Date(NA)
+    })
+
+    cache[[park_key]] <- mx
+    survey_max_cache(cache)
+    mx
+  }
+
   get_fiscal_dt <- function() {
     dt <- dt_cache()
     if (!is.null(dt)) return(dt)
@@ -1006,9 +1040,18 @@ server <- function(input, output, session) {
     fy24$date[which.min(abs(as.numeric(fy24$date - d)))]
   }
 
-  map_range_to_fy24 <- function(dr) {
+  map_range_to_fy24 <- function(dr, park = input$selected_park) {
     if (is.null(dr) || length(dr) != 2 || any(is.na(dr))) return(dr)
     out <- c(map_date_to_fy24(dr[1]), map_date_to_fy24(dr[2]))
+
+    # Clamp end date to max available survey date (per park) if needed
+    mx <- get_survey_max_date(park)
+    if (!is.na(mx)) {
+      out <- as.Date(out)
+      if (!is.na(out[2]) && out[2] > mx) out[2] <- mx
+      if (!is.na(out[1]) && out[1] > mx) out[1] <- mx
+    }
+
     if (out[1] > out[2]) out <- c(out[2], out[1])
     out
   }
