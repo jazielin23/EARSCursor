@@ -1149,35 +1149,37 @@ server <- function(input, output, session) {
  
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
  
-      # Horizontal bars so long attraction lists remain readable
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
-      p <- ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
+      # Bars by attraction (x = attraction, y = incremental impact)
+      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
         geom_col() +
         labs(
           title = NULL,
-          x = "Average Incremental EARS (% of Park Actuals)",
-          y = NULL
+          x = "Attraction",
+          y = "Average Incremental EARS (% of Park Actuals)"
         ) +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-          axis.text.x = element_text(family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_x_continuous(labels = scales::percent_format(scale = 1))
+        scale_y_continuous(
+          labels = scales::percent_format(scale = 1),
+          breaks = scales::breaks_width(0.25)
+        )
 
       plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
-      # Finer tick marks on the value axis and give y labels enough room
+      # Finer tick marks on the value axis and give x labels enough room
       plotly::layout(
         plt,
         height = 1200,
-        margin = list(l = 260, r = 20, t = 20, b = 60),
-        xaxis = list(tickformat = ".2f", dtick = 0.25, ticksuffix = "%", automargin = TRUE),
-        yaxis = list(automargin = TRUE)
+        margin = list(l = 80, r = 20, t = 20, b = 280),
+        xaxis = list(automargin = TRUE),
+        yaxis = list(dtick = 0.25, automargin = TRUE)
       )
     })
   } else {
@@ -1213,24 +1215,27 @@ server <- function(input, output, session) {
   
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
   
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
-      ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
+      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
         geom_col() +
         labs(
           title = NULL,
-          x = "Average Incremental EARS (% of Park Actuals)",
-          y = NULL
+          x = "Attraction",
+          y = "Average Incremental EARS (% of Park Actuals)"
         ) +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_x_continuous(labels = scales::percent_format(scale = 1))
+        scale_y_continuous(
+          labels = scales::percent_format(scale = 1),
+          breaks = scales::breaks_width(0.25)
+        )
     })
   }
  
