@@ -1,3 +1,14 @@
+## Dataiku/Shiny environments sometimes set HOME to a non-writable path.
+## bslib/sass uses ~/.cache; ensure a writable cache location to avoid noisy warnings.
+.home <- Sys.getenv("HOME", unset = "")
+if (!nzchar(.home) || !dir.exists(.home) || isTRUE(file.access(.home, 2) != 0)) {
+  Sys.setenv(HOME = tempdir())
+}
+.xdg <- Sys.getenv("XDG_CACHE_HOME", unset = "")
+if (!nzchar(.xdg) || !dir.exists(.xdg) || isTRUE(file.access(.xdg, 2) != 0)) {
+  Sys.setenv(XDG_CACHE_HOME = tempdir())
+}
+
 library(shiny)
 library(dplyr)
 library(ggplot2)
