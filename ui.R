@@ -110,11 +110,6 @@ ui <- page_sidebar(
       uiOutput("summary_text")
     ),
     nav_panel(
-      "Details",
-      h5("Top incremental impacts (mean across simulation runs)"),
-      tableOutput("details_table")
-    ),
-    nav_panel(
       "Plots",
       div(class = "plot-title", "Overall Experience Impact (bootstrap 95% CI)"),
       # Row 1: overall impact (full width)
@@ -136,9 +131,7 @@ ui <- page_sidebar(
       h5("Download simulation results"),
       helpText("Downloads include the per-run simulation output with Actual vs Simulation EARS and Incremental_EARS."),
       downloadButton("download_sim", "Download full results (CSV)", class = "btn-outline-secondary"),
-      br(),
-      br(),
-      downloadButton("download_summary", "Download summary table (CSV)", class = "btn-outline-secondary")
+      br()
     )
   ),
   tags$footer(

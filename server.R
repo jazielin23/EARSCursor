@@ -1147,6 +1147,12 @@ server <- function(input, output, session) {
         ) %>%
         arrange(desc(Actuals))
  
+      # Remove experiences used as simulation inputs from cannibalization view
+      sim_inputs <- selected_exps_rv()
+      if (length(sim_inputs) > 0) {
+        df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+      }
+
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
  
       # Bars by attraction (x = attraction, y = incremental impact)
@@ -1213,6 +1219,12 @@ server <- function(input, output, session) {
         ) %>%
         arrange(desc(Actuals))
   
+      # Remove experiences used as simulation inputs from cannibalization view
+      sim_inputs <- selected_exps_rv()
+      if (length(sim_inputs) > 0) {
+        df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+      }
+
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
   
       ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
@@ -1427,42 +1439,7 @@ server <- function(input, output, session) {
     if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 620, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
-  # ---- Details table ----
-  output$details_table <- renderTable({
-    sim_df <- simulation_results()
-    req(nrow(sim_df) > 0)
-    df_park <- sim_df %>% filter(Park == input$selected_park)
-
-    total_actuals <- df_park %>%
-      group_by(sim_run) %>%
-      summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
-      summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
-      pull(1)
-
-    df_name_simrun <- df_park %>%
-      group_by(NAME, sim_run) %>%
-      summarise(
-        Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
-        Actuals = sum(Actual_EARS, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
-
-    df_mean <- df_name_simrun %>%
-      group_by(NAME) %>%
-      summarise(
-        Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
-        Total_Actuals = sum(Actuals, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      arrange(desc(Mean_Inc_EARS_Pct))
-
-    head(df_mean, 20) %>%
-      mutate(
-        Mean_Inc_EARS_Pct = round(Mean_Inc_EARS_Pct, 3),
-        Total_Actuals = round(Total_Actuals, 2)
-      )
-  }, striped = TRUE, bordered = TRUE, spacing = "s", width = "100%")
+  # (Details tab removed per request)
 
   # ---- Download ----
   output$download_sim <- downloadHandler(
@@ -1474,41 +1451,7 @@ server <- function(input, output, session) {
     }
   )
 
-  output$download_summary <- downloadHandler(
-    filename = function() {
-      paste0("simulation_summary_", Sys.Date(), ".csv")
-    },
-    content = function(file) {
-      sim_df <- simulation_results()
-      df_park <- sim_df %>% filter(Park == input$selected_park)
-
-      total_actuals <- df_park %>%
-        group_by(sim_run) %>%
-        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
-        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
-        pull(1)
-
-      df_name_simrun <- df_park %>%
-        group_by(NAME, sim_run) %>%
-        summarise(
-          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
-          Actuals = sum(Actual_EARS, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
-
-      df_mean <- df_name_simrun %>%
-        group_by(NAME) %>%
-        summarise(
-          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
-          Total_Actuals = sum(Actuals, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        arrange(desc(Mean_Inc_EARS_Pct))
-
-      write.csv(df_mean, file, row.names = FALSE)
-    }
-  )
+  # (Summary download removed per request)
 }
  
 # UI is not included in your snippet; keep your existing ui <- ... definition
