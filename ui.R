@@ -138,7 +138,7 @@ ui <- page_sidebar(
       div(class = "plot-title", "Cannibalization (ordered by Actuals)"),
       div(
         style = "clear: both;",
-        card(class = "plot-card", style = "min-height: 940px;", uiOutput("histplot_ui"))
+        card(class = "plot-card plot-card-xscroll", style = "min-height: 940px;", uiOutput("histplot_ui"))
       ),
       div(style = "height: 6px;")
     ),
