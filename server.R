@@ -885,75 +885,147 @@ server <- function(input, output, session) {
 
   exp_data <- dkuReadDataset("MetaDataTool_Exp")
 
-  # ---- Survey date limits (used to constrain/clamp UI date ranges) ----
-  # Cache per park to avoid re-reading the dataset repeatedly.
-  survey_date_cache <- reactiveVal(list())
+  # ---- Fiscal calendar mapping (DT -> FY24) ----
+  # If a user picks dates outside FY24, map them to the corresponding FY24 date
+  # using the fiscal calendar table (DT) by fiscal week/day (or fiscal day-of-year).
+  dt_cache <- reactiveVal(NULL)
 
-  get_survey_date_limits <- function(park) {
-    park_key <- as.character(park)
-    cache <- survey_date_cache()
-    if (!is.null(cache[[park_key]])) return(cache[[park_key]])
+  get_fiscal_dt <- function() {
+    dt <- dt_cache()
+    if (!is.null(dt)) return(dt)
 
-    lim <- tryCatch({
-      sd <- dkuReadDataset("FY24_prepared")
-      names(sd) <- tolower(names(sd))
+    dt <- tryCatch(dkuReadDataset("DT"), error = function(e) NULL)
+    if (is.null(dt)) {
+      dt_cache(NULL)
+      return(NULL)
+    }
+    names(dt) <- tolower(names(dt))
 
-      date_col <- NULL
-      if ("visdate_parsed" %in% names(sd)) date_col <- "visdate_parsed"
-      if (is.null(date_col) && "visdate" %in% names(sd)) date_col <- "visdate"
-      if (is.null(date_col)) stop("FY24_prepared missing visdate_parsed/visdate")
+    # Identify date column
+    date_candidates <- c("date", "cal_date", "calendar_date", "day", "dt", "visdate", "visdate_parsed")
+    date_col <- date_candidates[date_candidates %in% names(dt)][1]
+    if (is.na(date_col) || is.null(date_col)) return(NULL)
 
-      if (!("park" %in% names(sd))) stop("FY24_prepared missing park column")
+    # Identify fiscal year column
+    fy_candidates <- c("fy", "fiscal_year", "fiscalyear")
+    fy_col <- fy_candidates[fy_candidates %in% names(dt)][1]
+    if (is.na(fy_col) || is.null(fy_col)) return(NULL)
 
-      d <- as.Date(sd[[date_col]])
-      d <- d[sd$park == as.numeric(park) & !is.na(d)]
-      if (length(d) == 0) stop("No dates for selected park")
+    # Optional keys
+    week_candidates <- c("fiscal_week", "fiscalweek", "fw", "week_of_fy", "fiscal_week_of_year")
+    dow_candidates <- c("fiscal_dow", "fiscal_day_of_week", "dow", "day_of_week", "weekday")
+    fday_candidates <- c("fiscal_day", "fiscal_day_of_year", "day_of_fy", "fy_day")
 
-      rng <- range(d, na.rm = TRUE)
-      list(min = rng[1], max = rng[2])
-    }, error = function(e) {
-      # Fallback: keep app usable even if dataset is unavailable at UI time
-      today <- Sys.Date()
-      list(min = today - 365, max = today)
-    })
+    week_col <- week_candidates[week_candidates %in% names(dt)][1]
+    dow_col <- dow_candidates[dow_candidates %in% names(dt)][1]
+    fday_col <- fday_candidates[fday_candidates %in% names(dt)][1]
 
-    cache[[park_key]] <- lim
-    survey_date_cache(cache)
-    lim
+    out <- data.frame(
+      date = as.Date(dt[[date_col]]),
+      fy_raw = dt[[fy_col]],
+      stringsAsFactors = FALSE
+    )
+
+    # Normalize FY values (e.g. "FY24" -> 2024)
+    fy_num <- suppressWarnings(as.integer(out$fy_raw))
+    if (anyNA(fy_num)) {
+      fy_chr <- as.character(out$fy_raw)
+      fy_digits <- suppressWarnings(as.integer(gsub("\\D+", "", fy_chr)))
+      # If FY is given as 24, convert to 2024 (assume 2000s)
+      fy_digits <- ifelse(!is.na(fy_digits) & fy_digits < 100, 2000 + fy_digits, fy_digits)
+      fy_num <- fy_digits
+    }
+    out$fy <- fy_num
+
+    if (!is.na(week_col) && !is.null(week_col)) out$fweek <- suppressWarnings(as.integer(dt[[week_col]])) else out$fweek <- NA_integer_
+    if (!is.na(fday_col) && !is.null(fday_col)) out$fday <- suppressWarnings(as.integer(dt[[fday_col]])) else out$fday <- NA_integer_
+
+    if (!is.na(dow_col) && !is.null(dow_col)) {
+      dow_val <- dt[[dow_col]]
+      if (is.numeric(dow_val)) {
+        out$dow <- suppressWarnings(as.integer(dow_val))
+      } else {
+        # map weekday names -> 1..7 (Mon..Sun) if needed
+        dow_chr <- tolower(as.character(dow_val))
+        map <- c(mon = 1, tue = 2, wed = 3, thu = 4, fri = 5, sat = 6, sun = 7)
+        out$dow <- unname(map[substr(dow_chr, 1, 3)])
+      }
+    } else {
+      out$dow <- as.integer(format(out$date, "%u"))
+    }
+
+    out <- out[!is.na(out$date) & !is.na(out$fy), ]
+    dt_cache(out)
+    out
   }
 
-  clamp_date_range <- function(dr, min_date, max_date) {
-    if (is.null(dr) || length(dr) != 2 || any(is.na(dr))) {
-      return(c(min_date, max_date))
-    }
-    start <- as.Date(dr[1])
-    end <- as.Date(dr[2])
-    if (is.na(start) || is.na(end)) return(c(min_date, max_date))
+  map_date_to_fy24 <- function(d) {
+    dt <- get_fiscal_dt()
+    d <- as.Date(d)
+    if (is.null(dt) || is.na(d)) return(d)
 
-    start <- max(min_date, min(max_date, start))
-    end <- max(min_date, min(max_date, end))
-    if (start > end) start <- end
-    c(start, end)
+    # Find exact match, else nearest date in DT
+    idx <- which(dt$date == d)
+    if (length(idx) == 0) {
+      idx <- which.min(abs(as.numeric(dt$date - d)))
+    } else {
+      idx <- idx[1]
+    }
+
+    row <- dt[idx, , drop = FALSE]
+    if (is.na(row$fy) || row$fy == 2024L) return(d)
+
+    fy24 <- dt[dt$fy == 2024L, , drop = FALSE]
+    if (nrow(fy24) == 0) return(d)
+
+    # Prefer fiscal day-of-year mapping if present
+    if (!is.na(row$fday[1]) && any(!is.na(fy24$fday))) {
+      tgt <- fy24[fy24$fday == row$fday[1], , drop = FALSE]
+      if (nrow(tgt) > 0) return(tgt$date[1])
+      # fallback: nearest fiscal day
+      fy24n <- fy24[!is.na(fy24$fday), , drop = FALSE]
+      if (nrow(fy24n) > 0) return(fy24n$date[which.min(abs(fy24n$fday - row$fday[1]))])
+    }
+
+    # Else map by fiscal week + day-of-week
+    if (!is.na(row$fweek[1]) && any(!is.na(fy24$fweek))) {
+      tgt <- fy24[fy24$fweek == row$fweek[1] & fy24$dow == row$dow[1], , drop = FALSE]
+      if (nrow(tgt) > 0) return(tgt$date[1])
+      # fallback: same week, any dow
+      tgt2 <- fy24[fy24$fweek == row$fweek[1], , drop = FALSE]
+      if (nrow(tgt2) > 0) return(tgt2$date[which.min(abs(tgt2$dow - row$dow[1]))])
+      # fallback: nearest week
+      fy24w <- fy24[!is.na(fy24$fweek), , drop = FALSE]
+      if (nrow(fy24w) > 0) {
+        near <- fy24w[which.min(abs(fy24w$fweek - row$fweek[1])), , drop = FALSE]
+        return(near$date[1])
+      }
+    }
+
+    # Final fallback: nearest calendar date in FY24
+    fy24$date[which.min(abs(as.numeric(fy24$date - d)))]
+  }
+
+  map_range_to_fy24 <- function(dr) {
+    if (is.null(dr) || length(dr) != 2 || any(is.na(dr))) return(dr)
+    out <- c(map_date_to_fy24(dr[1]), map_date_to_fy24(dr[2]))
+    if (out[1] > out[2]) out <- c(out[2], out[1])
+    out
   }
  
   get_exp_date_ranges <- function(input, selected_exps) {
-    lim <- get_survey_date_limits(input$selected_park)
     adjusted_any <- FALSE
 
     out <- lapply(selected_exps, function(exp_name) {
       dr_in <- input[[paste0("daterange_", exp_name)]]
-      dr_out <- clamp_date_range(dr_in, lim$min, lim$max)
+      dr_out <- map_range_to_fy24(dr_in)
       if (!identical(as.Date(dr_in), as.Date(dr_out))) adjusted_any <<- TRUE
       dr_out
     }) |> setNames(selected_exps)
 
     if (adjusted_any) {
       showNotification(
-        sprintf(
-          "One or more date ranges were adjusted to match available survey data (%s to %s).",
-          format(lim$min),
-          format(lim$max)
-        ),
+        "One or more date ranges were mapped to the corresponding dates in FY24 (via fiscal calendar DT).",
         type = "message",
         duration = 6
       )
@@ -1007,31 +1079,17 @@ server <- function(input, output, session) {
       return(helpText("Select one or more experiences to configure date ranges."))
     }
 
-    lim <- get_survey_date_limits(input$selected_park)
-
     lapply(exps, function(exp_name) {
       exp_label <- as.character(exp_data$Repository.Offering.Name[exp_data$name == exp_name][1])
       input_id <- paste0("daterange_", exp_name)
-      cur <- input[[input_id]]
-      # Default to last 30 days of available data
-      default_start <- max(lim$min, lim$max - 30)
-      default_end <- lim$max
-      dr <- if (is.null(cur)) c(default_start, default_end) else clamp_date_range(cur, lim$min, lim$max)
-
       bslib::tooltip(
         dateRangeInput(
           inputId = input_id,
           label = exp_label,
-          start = dr[1],
-          end = dr[2],
-          min = lim$min,
-          max = lim$max
+          start = Sys.Date() - 30,
+          end = Sys.Date()
         ),
-        sprintf(
-          "Dates are limited to available survey data (%s to %s).",
-          format(lim$min),
-          format(lim$max)
-        )
+        "If dates are not in FY24, they will be mapped to the corresponding FY24 dates using fiscal calendar DT."
       )
     })
   })
