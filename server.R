@@ -1002,9 +1002,9 @@ server <- function(input, output, session) {
         )
 
         # Clean up any invalid metrics that can break downstream summaries/plots.
-        # User request: if wRAA is Inf/-Inf, remove those rows.
-        if ("wRAA" %in% names(result)) {
-          result <- result[is.finite(result$wRAA), , drop = FALSE]
+        # User request: remove rows where wEEx is negative.
+        if ("wEEx" %in% names(result)) {
+          result <- result[!(is.finite(result$wEEx) & result$wEEx < 0), , drop = FALSE]
         }
 
         incProgress(0.85)
@@ -1101,16 +1101,16 @@ server <- function(input, output, session) {
  
   # ---- Plot output selectors (plotly optional) ----
   output$histplot_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("histplot", height = 520) else plotOutput("histplot", height = 520)
+    if (has_plotly) plotly::plotlyOutput("histplot", height = 950) else plotOutput("histplot", height = 950)
   })
   output$boxplot_park_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 420) else plotOutput("boxplot_park", height = 420)
+    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 800) else plotOutput("boxplot_park", height = 800)
   })
   output$boxplot_lifestage_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 420) else plotOutput("boxplot_lifestage", height = 420)
+    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 700) else plotOutput("boxplot_lifestage", height = 700)
   })
   output$boxplot_genre_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 420) else plotOutput("boxplot_genre", height = 420)
+    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 700) else plotOutput("boxplot_genre", height = 700)
   })
 
   # ---- Plots ----
