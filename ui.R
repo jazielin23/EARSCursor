@@ -115,15 +115,24 @@ ui <- page_sidebar(
     nav_panel(
       "Plots",
       div(class = "plot-title", "Overall Experience Impact (bootstrap 95% CI)"),
-      bslib::layout_column_wrap(
-        width = 1 / 3,
-        card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_park_ui")),
-        card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_lifestage_ui")),
-        card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_genre_ui"))
+      # NOTE: Some Dataiku/Shiny+htmlwidgets CSS stacks can cause wrapped children
+      # to not contribute to parent height, leading to overlap. We force a new
+      # block formatting context (overflow:auto) + an explicit clear between rows.
+      div(
+        style = "overflow: auto;",
+        bslib::layout_column_wrap(
+          width = 1 / 3,
+          card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_park_ui")),
+          card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_lifestage_ui")),
+          card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_genre_ui"))
+        )
       ),
-      div(style = "height: 12px;"),
+      div(style = "clear: both; height: 12px;"),
       div(class = "plot-title", "Cannibalization (ordered by Actuals)"),
-      card(class = "plot-card", style = "min-height: 780px;", uiOutput("histplot_ui")),
+      div(
+        style = "clear: both;",
+        card(class = "plot-card", style = "min-height: 780px;", uiOutput("histplot_ui"))
+      ),
       div(style = "height: 6px;")
     ),
     nav_panel(
