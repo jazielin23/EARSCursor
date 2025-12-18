@@ -1108,61 +1108,115 @@ server <- function(input, output, session) {
   })
 
   # ---- Plots ----
-  output$histplot <- (if (has_plotly) renderPlotly else renderPlot)({
-    sim_df <- simulation_results()
-    req(nrow(sim_df) > 0)
+  if (has_plotly) {
+    output$histplot <- plotly::renderPlotly({
+      sim_df <- simulation_results()
+      req(nrow(sim_df) > 0)
  
-    df_park <- sim_df %>% filter(Park == input$selected_park)
+      df_park <- sim_df %>% filter(Park == input$selected_park)
  
-    total_actuals <- df_park %>%
-      group_by(sim_run) %>%
-      summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
-      summarise(mean(Total_Actuals, na.rm = TRUE)) %>%
-      pull(1)
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE)) %>%
+        pull(1)
  
-    df_name_simrun <- df_park %>%
-      group_by(NAME, sim_run) %>%
-      summarise(
-        Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
-        Actuals = sum(Actual_EARS, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
+      df_name_simrun <- df_park %>%
+        group_by(NAME, sim_run) %>%
+        summarise(
+          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+          Actuals = sum(Actual_EARS, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
  
-    df_mean <- df_name_simrun %>%
-      group_by(NAME) %>%
-      summarise(
-        Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
-        Actuals = sum(Actuals, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      arrange(desc(Actuals))
+      df_mean <- df_name_simrun %>%
+        group_by(NAME) %>%
+        summarise(
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
+          Actuals = sum(Actuals, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        arrange(desc(Actuals))
  
-    df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
+      df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
  
-    p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
-      geom_col() +
-      labs(
-        title = NULL,
-        x = "Attraction",
-        y = "Average Incremental EARS (% of Park Actuals)"
-      ) +
-      theme_minimal(base_family = "Century Gothic") +
-      theme(
-        plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
-        axis.title.x = element_text(family = "Century Gothic"),
-        axis.title.y = element_text(family = "Century Gothic"),
-        axis.text.y = element_text(family = "Century Gothic"),
-        legend.position = "none"
-      ) +
-      scale_fill_brewer(palette = "Dark2") +
-      scale_y_continuous(labels = scales::percent_format(scale = 1))
+      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
+        geom_col() +
+        labs(
+          title = NULL,
+          x = "Attraction",
+          y = "Average Incremental EARS (% of Park Actuals)"
+        ) +
+        theme_minimal(base_family = "Century Gothic") +
+        theme(
+          plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
+          axis.title.x = element_text(family = "Century Gothic"),
+          axis.title.y = element_text(family = "Century Gothic"),
+          axis.text.y = element_text(family = "Century Gothic"),
+          legend.position = "none"
+        ) +
+        scale_fill_brewer(palette = "Dark2") +
+        scale_y_continuous(labels = scales::percent_format(scale = 1))
 
-    if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
-  })
+      plotly::ggplotly(p, tooltip = c("x", "y"))
+    })
+  } else {
+    output$histplot <- renderPlot({
+      sim_df <- simulation_results()
+      req(nrow(sim_df) > 0)
+  
+      df_park <- sim_df %>% filter(Park == input$selected_park)
+  
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE)) %>%
+        pull(1)
+  
+      df_name_simrun <- df_park %>%
+        group_by(NAME, sim_run) %>%
+        summarise(
+          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+          Actuals = sum(Actual_EARS, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
+  
+      df_mean <- df_name_simrun %>%
+        group_by(NAME) %>%
+        summarise(
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
+          Actuals = sum(Actuals, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        arrange(desc(Actuals))
+  
+      df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
+  
+      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
+        geom_col() +
+        labs(
+          title = NULL,
+          x = "Attraction",
+          y = "Average Incremental EARS (% of Park Actuals)"
+        ) +
+        theme_minimal(base_family = "Century Gothic") +
+        theme(
+          plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
+          axis.title.x = element_text(family = "Century Gothic"),
+          axis.title.y = element_text(family = "Century Gothic"),
+          axis.text.y = element_text(family = "Century Gothic"),
+          legend.position = "none"
+        ) +
+        scale_fill_brewer(palette = "Dark2") +
+        scale_y_continuous(labels = scales::percent_format(scale = 1))
+    })
+  }
  
-  output$boxplot_park <- (if (has_plotly) renderPlotly else renderPlot)({
+  output$boxplot_park <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1229,7 +1283,7 @@ server <- function(input, output, session) {
     if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
   })
  
-  output$boxplot_lifestage <- (if (has_plotly) renderPlotly else renderPlot)({
+  output$boxplot_lifestage <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1294,7 +1348,7 @@ server <- function(input, output, session) {
     if (has_plotly) plotly::ggplotly(p, tooltip = c("x", "y")) else p
   })
  
-  output$boxplot_genre <- (if (has_plotly) renderPlotly else renderPlot)({
+  output$boxplot_genre <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
     req("Genre" %in% names(sim_df))
