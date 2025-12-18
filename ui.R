@@ -117,14 +117,14 @@ ui <- page_sidebar(
       div(class = "plot-title", "Overall Experience Impact (bootstrap 95% CI)"),
       bslib::layout_column_wrap(
         width = 1 / 3,
-        card(class = "plot-card", uiOutput("boxplot_park_ui")),
-        card(class = "plot-card", uiOutput("boxplot_lifestage_ui")),
-        card(class = "plot-card", uiOutput("boxplot_genre_ui"))
+        card(class = "plot-card", style = "min-height: 760px;", uiOutput("boxplot_park_ui")),
+        card(class = "plot-card", style = "min-height: 760px;", uiOutput("boxplot_lifestage_ui")),
+        card(class = "plot-card", style = "min-height: 760px;", uiOutput("boxplot_genre_ui"))
       ),
       div(style = "height: 18px;"),
       # Row 3: cannibalization (full width)
       div(class = "plot-title", "Cannibalization (ordered by Actuals)"),
-      card(class = "plot-card", uiOutput("histplot_ui"))
+      card(class = "plot-card", style = "min-height: 900px;", uiOutput("histplot_ui"))
     ),
     nav_panel(
       "Downloads",
