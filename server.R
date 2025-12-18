@@ -6,6 +6,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 library(scales)
+library(bslib)
  
 ## -----------------------------------------------------------------------------
 ## Embedded simulation runner (ported from Sim.R)
@@ -880,14 +881,10 @@ QTRLY_GC b on a.name=b.name and a.Park = b.Park")
  
 server <- function(input, output, session) {
  
+  has_plotly <- requireNamespace("plotly", quietly = TRUE)
+
   exp_data <- dkuReadDataset("MetaDataTool_Exp")
- 
-  get_selected_exps <- function(input, exp_data) {
-    exp_data$name[unlist(lapply(exp_data$name, function(nm) {
-      isTRUE(input[[paste0("exp_", nm)]])
-    }))]
-  }
- 
+
   get_exp_date_ranges <- function(input, selected_exps) {
     lapply(selected_exps, function(exp_name) {
       input[[paste0("daterange_", exp_name)]]
@@ -915,166 +912,390 @@ server <- function(input, output, session) {
     df <- exp_data[exp_data$Park == as.numeric(input$selected_park), ]
     selectizeInput(
       "selected_exps",
-      "Select Experiences:",
+      "Select experiences",
       choices = setNames(df$name, df$Repository.Offering.Name),
       multiple = TRUE,
-      options = list(placeholder = "Choose experiences...")
+      options = list(placeholder = "Choose one or more experiences...")
     )
   })
  
   selected_exps_rv <- reactiveVal(character(0))
  
   observeEvent(input$selected_exps, {
-    selected_exps_rv(input$selected_exps)
+    selected_exps_rv(if (is.null(input$selected_exps)) character(0) else input$selected_exps)
   })
  
   observe({
-    req(selected_exps_rv())
-    lapply(selected_exps_rv(), function(exp_name) {
-      observeEvent(input[[paste0("remove_", exp_name)]], {
-        new_exps <- setdiff(selected_exps_rv(), exp_name)
-        selected_exps_rv(new_exps)
-        updateSelectizeInput(session, "selected_exps", selected = new_exps)
-      }, ignoreInit = TRUE)
-    })
+    # keep this observer lightweight; removal buttons are no longer used
+    invisible(NULL)
   })
  
   output$selected_exp_dates <- renderUI({
-    req(selected_exps_rv())
-    lapply(selected_exps_rv(), function(exp_name) {
+    exps <- selected_exps_rv()
+    if (length(exps) == 0) {
+      return(helpText("Select one or more experiences to configure date ranges."))
+    }
+
+    lapply(exps, function(exp_name) {
       exp_label <- as.character(exp_data$Repository.Offering.Name[exp_data$name == exp_name][1])
-      fluidRow(
-        column(
-          7,
-          dateRangeInput(
-            inputId = paste0("daterange_", exp_name),
-            label = exp_label,
-            start = Sys.Date() - 30,
-            end = Sys.Date()
-          )
+      input_id <- paste0("daterange_", exp_name)
+      bslib::tooltip(
+        dateRangeInput(
+          inputId = input_id,
+          label = exp_label,
+          start = Sys.Date() - 30,
+          end = Sys.Date()
         ),
-        column(
-          2,
-          actionButton(
-            inputId = paste0("remove_", exp_name),
-            label = NULL,
-            icon = icon("times"),
-            style = "margin-top: 25px;"
-          )
-        )
+        "If dates are not in FY24, they will be mapped to the corresponding FY24 dates using fiscal calendar DT."
       )
     })
+  })
+
+  # ---- Lightweight status/progress UI (no shinyWidgets dependency) ----
+  sim_status <- reactiveVal(list(state = "idle", pct = 0, msg = ""))
+
+  output$sim_status_ui <- renderUI({
+    s <- sim_status()
+    state_badge <- switch(
+      s$state,
+      running = span(class = "badge text-bg-primary", "Running"),
+      done = span(class = "badge text-bg-success", "Done"),
+      error = span(class = "badge text-bg-danger", "Error"),
+      span(class = "badge text-bg-secondary", "Idle")
+    )
+
+    tagList(
+      state_badge,
+      tags$div(style = "height: 8px;"),
+      tags$progress(value = s$pct, max = 100, style = "width: 100%; height: 14px;"),
+      if (nzchar(s$msg)) tags$div(class = "text-muted", style = "margin-top: 6px; font-size: 0.95rem;", s$msg)
+    )
   })
  
   # ---- Run simulation ----
   simulation_results <- eventReactive(input$simulate, {
-    showModal(modalDialog(
-      title = "Simulation in Progress",
-      "Please wait while the simulation runs. This may take several minutes.",
-      footer = NULL,
-      easyClose = FALSE
-    ))
- 
     req(input$selected_park)
     exp_name <- selected_exps_rv()
-    req(length(exp_name) > 0)
+    validate(need(length(exp_name) > 0, "Select at least one experience to run the simulation."))
     exp_date_ranges <- get_exp_date_ranges(input, exp_name)
  
-    cat("Simulation Inputs:\n")
-    cat("Park:", as.numeric(input$selected_park), "\n")
-    cat("Experiences:", paste(exp_name, collapse = ", "), "\n")
-    cat("Date Ranges:\n")
-    print(exp_date_ranges)
-    cat("n_runs:", as.numeric(input$n_runs), "\n")
-    cat("num_cores:", 5, "\n")
-      
-print(list(
-  park = input$selected_park,
-  exp_name = selected_exps_rv(),
-  exp_date_ranges = get_exp_date_ranges(input, selected_exps_rv()),
-  n_runs = input$n_runs
-))
- 
-    result <- run_simulation(
-      park = as.numeric(input$selected_park),
-      exp_name = exp_name,
-      exp_date_ranges = exp_date_ranges,
-      n_runs = as.numeric(input$n_runs),
-      num_cores = 5
+    sim_status(list(state = "running", pct = 10, msg = "Simulation started…"))
+
+    withProgress(
+      message = "Running simulation…",
+      detail = "This can take a few minutes depending on number of runs.",
+      value = 0,
+      {
+        incProgress(0.1)
+
+        result <- tryCatch(
+          run_simulation(
+            park = as.numeric(input$selected_park),
+            exp_name = exp_name,
+            exp_date_ranges = exp_date_ranges,
+            n_runs = as.numeric(input$n_runs),
+            num_cores = 5
+          ),
+          error = function(e) {
+            sim_status(list(state = "error", pct = 0, msg = conditionMessage(e)))
+            stop(e)
+          }
+        )
+
+        # Clean up any invalid metrics that can break downstream summaries/plots.
+        # User request: remove rows where wEEx is negative.
+        if ("wEEx" %in% names(result)) {
+          result <- result[!(is.finite(result$wEEx) & result$wEEx < 0), , drop = FALSE]
+        }
+
+        incProgress(0.85)
+        sim_status(list(state = "done", pct = 100, msg = "Simulation complete."))
+        incProgress(0.05)
+        result
+      }
     )
- 
-    removeModal()
-    result
   })
  
-  # ---- Info text ----
-  sim_result <- eventReactive(input$simulate, {
-    selected_exps <- get_selected_exps(input, exp_data)
-    req(selected_exps)
-    sapply(selected_exps, function(exp_name) {
-      dr <- input[[paste0("daterange_", exp_name)]]
-      exp_label <- exp_data$Repository.Offering.Name[exp_data$name == exp_name]
-      paste0(exp_label, " (", exp_name, "): ", paste(dr, collapse = " to "))
-    })
-  })
- 
-  output$siminfo <- renderText({
-    paste(sim_result(), collapse = "\n")
-  })
- 
-  # ---- Plots ----
-  output$histplot <- renderPlot({
+  # ---- Summary helpers ----
+  park_summary <- reactive({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
- 
+
     df_park <- sim_df %>% filter(Park == input$selected_park)
- 
+    req(nrow(df_park) > 0)
+
     total_actuals <- df_park %>%
       group_by(sim_run) %>%
       summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
-      summarise(mean(Total_Actuals, na.rm = TRUE)) %>%
+      summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
       pull(1)
+
+    df_overall <- df_park %>%
+      group_by(sim_run) %>%
+      summarise(Inc_EARS = sum(Incremental_EARS, na.rm = TRUE), .groups = "drop") %>%
+      mutate(Inc_EARS_Pct = 100 * Inc_EARS / total_actuals) %>%
+      filter(is.finite(Inc_EARS_Pct))
+
+    x <- df_overall$Inc_EARS_Pct
+    x <- x[is.finite(x)]
+    mu <- mean(x, na.rm = TRUE)
+
+    set.seed(1)
+    B <- 2000L
+    boot_means <- replicate(B, mean(sample(x, size = length(x), replace = TRUE), na.rm = TRUE))
+    ci <- stats::quantile(boot_means, probs = c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+
+    list(
+      total_actuals = total_actuals,
+      overall = df_overall,
+      mu = mu,
+      ci = ci
+    )
+  })
+
+  output$summary_boxes <- renderUI({
+    s <- park_summary()
+
+    layout_column_wrap(
+      width = 1 / 3,
+      value_box(
+        title = "Overall impact (mean)",
+        value = sprintf("%.2f%%", s$mu)
+      ),
+      value_box(
+        title = "95% CI (bootstrap)",
+        value = sprintf("%.2f%% to %.2f%%", s$ci[1], s$ci[2])
+      ),
+      value_box(
+        title = "Runs",
+        value = as.character(input$n_runs)
+      )
+    )
+  })
+
+  output$summary_text <- renderUI({
+    exps <- selected_exps_rv()
+    if (length(exps) == 0) return(NULL)
+
+    labels <- exp_data %>%
+      filter(name %in% exps) %>%
+      distinct(name, Repository.Offering.Name) %>%
+      arrange(Repository.Offering.Name)
+
+    park_labels <- c(
+      "1" = "Magic Kingdom",
+      "2" = "EPCOT",
+      "3" = "Hollywood Studios",
+      "4" = "Animal Kingdom"
+    )
+    park_name <- unname(park_labels[as.character(input$selected_park)])
+    if (is.na(park_name) || is.null(park_name)) park_name <- as.character(input$selected_park)
+
+    tagList(
+      h5("Inputs"),
+      tags$ul(
+        tags$li(strong("Park: "), park_name),
+        tags$li(strong("Experiences selected: "), paste(labels$Repository.Offering.Name, collapse = ", "))
+      )
+    )
+  })
  
+  # ---- Plot output selectors (plotly optional) ----
+  # NOTE: keep these UI outputs unconditional (no req()), otherwise cards render empty
+  # until after the simulation runs.
+  get_histplot_height <- function() {
+    sim_df <- tryCatch(simulation_results(), error = function(e) NULL)
+    if (is.null(sim_df) || !is.data.frame(sim_df) || nrow(sim_df) == 0) return(900L)
+
+    df_park <- sim_df %>% filter(Park == input$selected_park)
+    total_actuals <- df_park %>%
+      group_by(sim_run) %>%
+      summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+      summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+      pull(1)
+
     df_name_simrun <- df_park %>%
       group_by(NAME, sim_run) %>%
       summarise(
         Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
-        Actuals = sum(Actual_EARS, na.rm = TRUE),
         .groups = "drop"
       ) %>%
       mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
- 
+
     df_mean <- df_name_simrun %>%
       group_by(NAME) %>%
-      summarise(
-        Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
-        Actuals = sum(Actuals, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      arrange(desc(Actuals))
- 
-    df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
- 
-    ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
-      geom_bar(stat = "identity") +
-      labs(
-        title = NULL,
-        x = "Attraction",
-        y = "Average Incremental EARS (% of Park Actuals)"
-      ) +
-      theme_minimal(base_family = "Century Gothic") +
-      theme(
-        plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
-        axis.title.x = element_text(family = "Century Gothic"),
-        axis.title.y = element_text(family = "Century Gothic"),
-        axis.text.y = element_text(family = "Century Gothic"),
-        legend.position = "none"
-      ) +
-      scale_y_continuous(labels = scales::percent_format(scale = 1))
+      summarise(Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE), .groups = "drop")
+
+    sim_inputs <- selected_exps_rv()
+    if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+    df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+
+    n <- nrow(df_mean)
+    # ~20-24px per bar works well in Dataiku; cap to avoid huge pages.
+    as.integer(max(650, min(1400, 22 * n + 200)))
+  }
+
+  output$histplot_ui <- renderUI({
+    h <- get_histplot_height()
+    if (has_plotly) plotly::plotlyOutput("histplot", height = h) else plotOutput("histplot", height = h)
   })
+  output$boxplot_park_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 460) else plotOutput("boxplot_park", height = 460)
+  })
+  output$boxplot_lifestage_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 620) else plotOutput("boxplot_lifestage", height = 620)
+  })
+  output$boxplot_genre_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 620) else plotOutput("boxplot_genre", height = 620)
+  })
+
+  # ---- Plots ----
+  # Cannibalization: Plotly bar chart, preserving all bars by widening categorical axis.
+  if (has_plotly) {
+    output$histplot <- plotly::renderPlotly({
+      sim_df <- simulation_results()
+      req(nrow(sim_df) > 0)
+
+      df_park <- sim_df %>% filter(Park == input$selected_park)
+
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+        pull(1)
+
+      df_name_simrun <- df_park %>%
+        group_by(NAME, sim_run) %>%
+        summarise(
+          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+          Actuals = sum(Actual_EARS, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
+
+      df_mean <- df_name_simrun %>%
+        group_by(NAME) %>%
+        summarise(
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
+          Actuals = sum(Actuals, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        arrange(desc(Actuals))
+
+      # Remove experiences used as simulation inputs from cannibalization view
+      sim_inputs <- selected_exps_rv()
+      if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+
+      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
+
+      n_cats <- nrow(df_mean)
+      # Ensure bars remain visible by giving each category enough pixels.
+      width_px <- max(1200, n_cats * 18)
+      height_px <- get_histplot_height()
+
+      plt <- plotly::plot_ly(
+        data = df_mean,
+        x = ~NAME,
+        y = ~Mean_Inc_EARS_Pct,
+        type = "bar",
+        marker = list(color = "#2C7FB8"),
+        hovertemplate = paste(
+          "<b>%{x}</b>",
+          "<br>Avg Incremental EARS: %{y:.2f}%",
+          "<extra></extra>"
+        )
+      )
+
+      plt <- plotly::layout(
+        plt,
+        height = height_px,
+        width = width_px,
+        bargap = 0.05,
+        margin = list(l = 80, r = 20, t = 10, b = 320),
+        xaxis = list(
+          type = "category",
+          automargin = TRUE,
+          tickangle = 90,
+          categoryorder = "array",
+          categoryarray = as.character(levels(df_mean$NAME))
+        ),
+        yaxis = list(
+          automargin = TRUE,
+          ticksuffix = "%",
+          tickformat = ".2f"
+        )
+      )
+
+      plt <- plotly::config(plt, responsive = FALSE)
+
+      # Force the widget element to the wider width so bars aren't sub-pixel thin.
+      htmlwidgets::onRender(
+        plt,
+        sprintf(
+          "function(el,x){el.style.width='%dpx'; if(window.Plotly){Plotly.Plots.resize(el);} }",
+          width_px
+        )
+      )
+    })
+  } else {
+    output$histplot <- renderPlot({
+      sim_df <- simulation_results()
+      req(nrow(sim_df) > 0)
+
+      df_park <- sim_df %>% filter(Park == input$selected_park)
+
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+        pull(1)
+
+      df_name_simrun <- df_park %>%
+        group_by(NAME, sim_run) %>%
+        summarise(
+          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+          Actuals = sum(Actual_EARS, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
+
+      df_mean <- df_name_simrun %>%
+        group_by(NAME) %>%
+        summarise(
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
+          Actuals = sum(Actuals, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        arrange(desc(Actuals))
+
+      sim_inputs <- selected_exps_rv()
+      if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+
+      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
+
+      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct)) +
+        geom_col(fill = "#2C7FB8") +
+        geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
+        labs(
+          title = NULL,
+          x = "Attraction",
+          y = "Average Incremental EARS (% of Park Actuals)"
+        ) +
+        theme_minimal(base_family = "Century Gothic") +
+        theme(
+          plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
+          axis.title.x = element_text(family = "Century Gothic"),
+          axis.title.y = element_text(family = "Century Gothic"),
+          legend.position = "none"
+        ) +
+        scale_y_continuous(labels = scales::percent_format(scale = 1))
+    })
+  }
  
-  output$boxplot_park <- renderPlot({
+  output$boxplot_park <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1114,7 +1335,7 @@ print(list(
     ci <- stats::quantile(boot_means, probs = c(0.025, 0.975), na.rm = TRUE, names = FALSE)
     mu <- mean(x, na.rm = TRUE)
 
-    ggplot(df_box, aes(x = Inc_EARS_Pct)) +
+    p <- ggplot(df_box, aes(x = Inc_EARS_Pct)) +
       geom_histogram(bins = min(30L, max(10L, length(x))), fill = "#5DADE2", color = "white", alpha = 0.9) +
       geom_vline(xintercept = mu, linewidth = 0.9, color = "#1B4F72") +
       geom_vline(xintercept = ci[1], linetype = "dashed", linewidth = 0.9, color = "#1B4F72") +
@@ -1137,9 +1358,11 @@ print(list(
         axis.text.y = element_text(family = "Century Gothic")
       ) +
       scale_x_continuous(labels = scales::percent_format(scale = 1))
+
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 460, margin = list(l = 60, r = 20, t = 20, b = 60)) else p
   })
  
-  output$boxplot_lifestage <- renderPlot({
+  output$boxplot_lifestage <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1181,7 +1404,7 @@ print(list(
  
     df_life$LifeStage <- factor(df_life$LifeStage, levels = sort(unique(df_life$LifeStage)))
  
-    ggplot(df_life, aes(x = LifeStage, y = Inc_EARS_Pct, fill = LifeStage)) +
+    p <- ggplot(df_life, aes(x = LifeStage, y = Inc_EARS_Pct, fill = LifeStage)) +
       geom_boxplot() +
       labs(
         title = NULL,
@@ -1197,11 +1420,14 @@ print(list(
         axis.title.y = element_text(family = "Century Gothic"),
         axis.text.y = element_text(family = "Century Gothic")
       ) +
+      scale_fill_brewer(palette = "Dark2") +
       scale_x_discrete(labels = lifestage_labels) +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
+
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 620, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
-  output$boxplot_genre <- renderPlot({
+  output$boxplot_genre <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
     req("Genre" %in% names(sim_df))
@@ -1236,7 +1462,7 @@ print(list(
  
     df_genre$Genre <- factor(df_genre$Genre, levels = sort(unique(df_genre$Genre)))
  
-    ggplot(df_genre, aes(x = Genre, y = Inc_EARS_Pct, fill = Genre)) +
+    p <- ggplot(df_genre, aes(x = Genre, y = Inc_EARS_Pct, fill = Genre)) +
       geom_boxplot() +
       labs(
         title = NULL,
@@ -1251,9 +1477,14 @@ print(list(
         axis.title.y = element_text(family = "Century Gothic"),
         axis.text.y = element_text(family = "Century Gothic")
       ) +
+      scale_fill_brewer(palette = "Dark2") +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
+
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 620, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
+  # (Details tab removed per request)
+
   # ---- Download ----
   output$download_sim <- downloadHandler(
     filename = function() {
@@ -1263,9 +1494,14 @@ print(list(
       write.csv(simulation_results(), file, row.names = FALSE)
     }
   )
+
+  # (Summary download removed per request)
 }
  
 # UI is not included in your snippet; keep your existing ui <- ... definition
 # and ensure it has: input$selected_park, input$n_runs, input$simulate, and output placeholders.
  
 # shinyApp(ui = ui, server = server)
+
+# In some runtimes (e.g. Dataiku/Shiny wrappers), `server.R` must *return* the server function.
+server
