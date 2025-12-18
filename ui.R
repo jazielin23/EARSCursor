@@ -53,9 +53,11 @@ ui <- page_sidebar(
       .form-label { font-weight: 600; }
       :focus { outline: 3px solid rgba(13,110,253,.35); outline-offset: 2px; }
 
-      /* Make sure plot cards show full widget height (no inner scrollbars) */
-      .plot-card { height: auto; }
-      .plot-card .card-body { overflow: visible; }
+      /* Prevent plot widgets from overlapping subsequent rows */
+      .plot-card,
+      .plot-card .card-body {
+        overflow: hidden;
+      }
     '))
   ),
   title = div(
@@ -118,13 +120,13 @@ ui <- page_sidebar(
       # Row 2: LifeStage + Genre (side-by-side)
       layout_columns(
         col_widths = c(6, 6),
-        card(class = "plot-card", style = "min-height: 700px;", uiOutput("boxplot_lifestage_ui")),
-        card(class = "plot-card", style = "min-height: 700px;", uiOutput("boxplot_genre_ui"))
+        card(class = "plot-card", style = "min-height: 650px;", uiOutput("boxplot_lifestage_ui")),
+        card(class = "plot-card", style = "min-height: 650px;", uiOutput("boxplot_genre_ui"))
       ),
       br(),
       # Row 3: cannibalization (full width)
       div(class = "plot-title", "Cannibalization (ordered by Actuals)"),
-      card(class = "plot-card", style = "min-height: 1280px;", uiOutput("histplot_ui"))
+      card(class = "plot-card", style = "min-height: 860px;", uiOutput("histplot_ui"))
     ),
     nav_panel(
       "Downloads",
