@@ -1102,8 +1102,30 @@ server <- function(input, output, session) {
   # ---- Plot output selectors (plotly optional) ----
   # NOTE: keep these UI outputs unconditional (no req()), otherwise cards render empty
   # until after the simulation runs.
+  get_histplot_height <- function() {
+    sim_df <- tryCatch(simulation_results(), error = function(e) NULL)
+    if (is.null(sim_df) || !is.data.frame(sim_df) || nrow(sim_df) == 0) return(900L)
+
+    df_park <- sim_df %>% filter(Park == input$selected_park)
+    df_name_simrun <- df_park %>%
+      group_by(NAME, sim_run) %>%
+      summarise(Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE), .groups = "drop")
+    df_mean <- df_name_simrun %>%
+      group_by(NAME) %>%
+      summarise(Mean_Inc_EARS = mean(Sum_Inc_EARS, na.rm = TRUE), .groups = "drop")
+
+    sim_inputs <- selected_exps_rv()
+    if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+    df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
+
+    n <- nrow(df_mean)
+    # ~20-24px per bar works well in Dataiku; cap to avoid huge pages.
+    as.integer(max(650, min(1400, 22 * n + 200)))
+  }
+
   output$histplot_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("histplot", height = 900) else plotOutput("histplot", height = 900)
+    h <- get_histplot_height()
+    if (has_plotly) plotly::plotlyOutput("histplot", height = h) else plotOutput("histplot", height = h)
   })
   output$boxplot_park_ui <- renderUI({
     if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 460) else plotOutput("boxplot_park", height = 460)
@@ -1147,7 +1169,8 @@ server <- function(input, output, session) {
       }
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
+      # Reset factor levels AFTER filtering to avoid Plotly/ggplotly spacing oddities
+      df_mean$NAME <- factor(df_mean$NAME, levels = rev(unique(df_mean$NAME)))
 
       # Horizontal bars (via coord_flip) for readability with many categories
       p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
@@ -1171,10 +1194,12 @@ server <- function(input, output, session) {
         scale_y_continuous(labels = scales::comma)
 
       plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
+      h <- get_histplot_height()
       plotly::layout(
         plt,
-        height = 900,
+        height = h,
         margin = list(l = 260, r = 20, t = 20, b = 60),
+        # coord_flip() can swap axes; set both defensively
         xaxis = list(tickformat = ",.0f", automargin = TRUE),
         yaxis = list(automargin = TRUE)
       )
@@ -1210,7 +1235,7 @@ server <- function(input, output, session) {
       }
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
+      df_mean$NAME <- factor(df_mean$NAME, levels = rev(unique(df_mean$NAME)))
   
       ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
         geom_col() +
