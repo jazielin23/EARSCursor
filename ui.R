@@ -58,6 +58,7 @@ ui <- page_sidebar(
       .plot-card .card-body {
         overflow: hidden;
       }
+      .plot-card { position: relative; }
     '))
   ),
   title = div(
@@ -115,18 +116,23 @@ ui <- page_sidebar(
       "Plots",
       div(class = "plot-title", "Overall Experience Impact (bootstrap 95% CI)"),
       # Row 1: overall impact (full width)
-      card(class = "plot-card", style = "min-height: 520px;", uiOutput("boxplot_park_ui")),
-      br(),
+      card(class = "plot-card", style = "height: 560px;", uiOutput("boxplot_park_ui")),
+      div(style = "height: 14px;"),
       # Row 2: LifeStage + Genre (side-by-side)
-      layout_columns(
-        col_widths = c(6, 6),
-        card(class = "plot-card", style = "min-height: 650px;", uiOutput("boxplot_lifestage_ui")),
-        card(class = "plot-card", style = "min-height: 650px;", uiOutput("boxplot_genre_ui"))
+      fluidRow(
+        column(
+          6,
+          card(class = "plot-card", style = "height: 720px;", uiOutput("boxplot_lifestage_ui"))
+        ),
+        column(
+          6,
+          card(class = "plot-card", style = "height: 720px;", uiOutput("boxplot_genre_ui"))
+        )
       ),
-      br(),
+      div(style = "height: 14px;"),
       # Row 3: cannibalization (full width)
       div(class = "plot-title", "Cannibalization (ordered by Actuals)"),
-      card(class = "plot-card", style = "min-height: 860px;", uiOutput("histplot_ui"))
+      card(class = "plot-card", style = "height: 820px;", uiOutput("histplot_ui"))
     ),
     nav_panel(
       "Downloads",
