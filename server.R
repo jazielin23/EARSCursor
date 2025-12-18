@@ -1048,8 +1048,8 @@ server <- function(input, output, session) {
     mx <- get_survey_max_date(park)
     if (!is.na(mx)) {
       out <- as.Date(out)
+      # Only clamp the END date per request.
       if (!is.na(out[2]) && out[2] > mx) out[2] <- mx
-      if (!is.na(out[1]) && out[1] > mx) out[1] <- mx
     }
 
     if (out[1] > out[2]) out <- c(out[2], out[1])
