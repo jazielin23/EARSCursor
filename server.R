@@ -1458,3 +1458,6 @@ server <- function(input, output, session) {
 # and ensure it has: input$selected_park, input$n_runs, input$simulate, and output placeholders.
  
 # shinyApp(ui = ui, server = server)
+
+# In some runtimes (e.g. Dataiku/Shiny wrappers), `server.R` must *return* the server function.
+server
