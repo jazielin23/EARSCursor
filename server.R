@@ -1100,26 +1100,19 @@ server <- function(input, output, session) {
   })
  
   # ---- Plot output selectors (plotly optional) ----
-  histplot_height <- reactive({
-    sim_df <- simulation_results()
-    req(nrow(sim_df) > 0)
-    n_items <- sim_df %>% filter(Park == input$selected_park) %>% distinct(NAME) %>% nrow()
-    # ~26px per category + padding; cap to keep page reasonable
-    min(1800, max(650, 26 * n_items + 200))
-  })
-
+  # NOTE: keep these UI outputs unconditional (no req()), otherwise cards render empty
+  # until after the simulation runs.
   output$histplot_ui <- renderUI({
-    h <- histplot_height()
-    if (has_plotly) plotly::plotlyOutput("histplot", height = h) else plotOutput("histplot", height = h)
+    if (has_plotly) plotly::plotlyOutput("histplot", height = 1200) else plotOutput("histplot", height = 1200)
   })
   output$boxplot_park_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 520) else plotOutput("boxplot_park", height = 520)
+    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 460) else plotOutput("boxplot_park", height = 460)
   })
   output$boxplot_lifestage_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 520) else plotOutput("boxplot_lifestage", height = 520)
+    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 620) else plotOutput("boxplot_lifestage", height = 620)
   })
   output$boxplot_genre_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 520) else plotOutput("boxplot_genre", height = 520)
+    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 620) else plotOutput("boxplot_genre", height = 620)
   })
 
   # ---- Plots ----
@@ -1157,6 +1150,7 @@ server <- function(input, output, session) {
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
  
       # Horizontal bars so long attraction lists remain readable
+      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
       p <- ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
         geom_col() +
         labs(
@@ -1174,15 +1168,14 @@ server <- function(input, output, session) {
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_y_continuous(labels = scales::percent_format(scale = 1))
+        scale_x_continuous(labels = scales::percent_format(scale = 1))
 
-      h <- histplot_height()
       plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
       # Finer tick marks on the value axis and give y labels enough room
       plotly::layout(
         plt,
-        height = h,
-        margin = list(l = 220, r = 20, t = 20, b = 60),
+        height = 1200,
+        margin = list(l = 260, r = 20, t = 20, b = 60),
         xaxis = list(tickformat = ".2f", dtick = 0.25, ticksuffix = "%", automargin = TRUE),
         yaxis = list(automargin = TRUE)
       )
@@ -1220,6 +1213,7 @@ server <- function(input, output, session) {
   
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
   
+      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
       ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
         geom_col() +
         labs(
@@ -1236,7 +1230,7 @@ server <- function(input, output, session) {
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_y_continuous(labels = scales::percent_format(scale = 1))
+        scale_x_continuous(labels = scales::percent_format(scale = 1))
     })
   }
  
@@ -1304,7 +1298,7 @@ server <- function(input, output, session) {
       ) +
       scale_x_continuous(labels = scales::percent_format(scale = 1))
 
-    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 520, margin = list(l = 60, r = 20, t = 20, b = 60)) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 460, margin = list(l = 60, r = 20, t = 20, b = 60)) else p
   })
  
   output$boxplot_lifestage <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
@@ -1369,7 +1363,7 @@ server <- function(input, output, session) {
       scale_x_discrete(labels = lifestage_labels) +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 520, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 620, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
   output$boxplot_genre <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
@@ -1425,7 +1419,7 @@ server <- function(input, output, session) {
       scale_fill_brewer(palette = "Dark2") +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 520, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 620, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
   # ---- Details table ----
