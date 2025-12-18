@@ -59,6 +59,13 @@ ui <- page_sidebar(
         overflow: hidden;
       }
       .plot-card { position: relative; margin-bottom: 12px; }
+
+      /* Allow horizontal scroll for very wide bar charts */
+      .plot-card-xscroll,
+      .plot-card-xscroll .card-body {
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+      }
     '))
   ),
   title = div(
@@ -131,7 +138,7 @@ ui <- page_sidebar(
       div(class = "plot-title", "Cannibalization (ordered by Actuals)"),
       div(
         style = "clear: both;",
-        card(class = "plot-card", style = "min-height: 940px;", uiOutput("histplot_ui"))
+        card(class = "plot-card plot-card-xscroll", style = "min-height: 940px;", uiOutput("histplot_ui"))
       ),
       div(style = "height: 6px;")
     ),

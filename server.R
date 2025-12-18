@@ -1154,10 +1154,6 @@ server <- function(input, output, session) {
       }
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
-      # Too many categories makes bars appear "missing" (they get ultra-thin).
-      # Show top N by Actuals (already sorted) for readability.
-      top_n <- 35L
-      df_mean <- head(df_mean, top_n)
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
 
       # Vertical bars (x = attraction, y = incremental impact)
@@ -1165,7 +1161,7 @@ server <- function(input, output, session) {
         geom_col() +
         labs(
           title = NULL,
-          x = sprintf("Attraction (top %d by Actuals)", top_n),
+          x = "Attraction",
           y = "Average Incremental EARS (% of Park Actuals)"
         ) +
         theme_minimal(base_family = "Century Gothic") +
@@ -1183,14 +1179,24 @@ server <- function(input, output, session) {
           breaks = scales::breaks_width(0.25)
         )
 
-      plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
-      # Finer tick marks on the value axis and give x labels enough room
-      plotly::layout(
+      n_cats <- length(unique(df_mean$NAME))
+      width_px <- max(1200, n_cats * 18)
+
+      plt <- plotly::ggplotly(p, tooltip = c("x", "y")) |>
+        plotly::layout(
+          height = 820,
+          width = width_px,
+          bargap = 0.05,
+          margin = list(l = 80, r = 20, t = 20, b = 300),
+          xaxis = list(type = "category", automargin = TRUE),
+          yaxis = list(dtick = 0.25, automargin = TRUE)
+        ) |>
+        plotly::config(responsive = FALSE)
+
+      # Force the widget element to the wider width so bars aren't sub-pixel thin.
+      htmlwidgets::onRender(
         plt,
-        height = 820,
-        margin = list(l = 80, r = 20, t = 20, b = 300),
-        xaxis = list(automargin = TRUE),
-        yaxis = list(dtick = 0.25, automargin = TRUE)
+        sprintf("function(el,x){el.style.width='%dpx'; if(window.Plotly){Plotly.Plots.resize(el);} }", width_px)
       )
     })
   } else {
@@ -1231,15 +1237,13 @@ server <- function(input, output, session) {
       }
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
-      top_n <- 35L
-      df_mean <- head(df_mean, top_n)
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
   
       ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
         geom_col() +
         labs(
           title = NULL,
-          x = sprintf("Attraction (top %d by Actuals)", top_n),
+          x = "Attraction",
           y = "Average Incremental EARS (% of Park Actuals)"
         ) +
         theme_minimal(base_family = "Century Gothic") +
