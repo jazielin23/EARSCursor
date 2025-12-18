@@ -1170,9 +1170,9 @@ server <- function(input, output, session) {
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
       # Reset factor levels AFTER filtering to avoid Plotly/ggplotly spacing oddities
-      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
+      df_mean$NAME <- factor(df_mean$NAME, levels = rev(unique(df_mean$NAME)))
 
-      # Vertical bars: x-axis is attraction (requested)
+      # Horizontal bars (via coord_flip) for readability with many categories
       p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
         geom_col() +
         geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
@@ -1181,10 +1181,10 @@ server <- function(input, output, session) {
           x = "Attraction",
           y = "Mean Incremental EARS"
         ) +
+        coord_flip() +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
@@ -1193,24 +1193,15 @@ server <- function(input, output, session) {
         scale_fill_brewer(palette = "Dark2") +
         scale_y_continuous(labels = scales::comma)
 
-      n_cats <- length(unique(df_mean$NAME))
-      width_px <- max(1200, n_cats * 18)
-
-      plt <- plotly::ggplotly(p, tooltip = c("x", "y")) |>
-        plotly::layout(
-          height = 820,
-          width = width_px,
-          bargap = 0.05,
-          margin = list(l = 80, r = 20, t = 20, b = 320),
-          xaxis = list(type = "category", automargin = TRUE, categoryorder = "array", categoryarray = as.character(unique(df_mean$NAME))),
-          yaxis = list(automargin = TRUE, tickformat = ",.0f")
-        ) |>
-        plotly::config(responsive = FALSE)
-
-      # Force the widget element to the wider width so bars aren't sub-pixel thin.
-      htmlwidgets::onRender(
+      plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
+      h <- get_histplot_height()
+      plotly::layout(
         plt,
-        sprintf("function(el,x){el.style.width='%dpx'; if(window.Plotly){Plotly.Plots.resize(el);} }", width_px)
+        height = h,
+        margin = list(l = 260, r = 20, t = 20, b = 60),
+        # coord_flip() can swap axes; set both defensively
+        xaxis = list(tickformat = ",.0f", automargin = TRUE),
+        yaxis = list(automargin = TRUE)
       )
     })
   } else {
@@ -1244,7 +1235,7 @@ server <- function(input, output, session) {
       }
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
-      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
+      df_mean$NAME <- factor(df_mean$NAME, levels = rev(unique(df_mean$NAME)))
   
       ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
         geom_col() +
@@ -1254,10 +1245,10 @@ server <- function(input, output, session) {
           x = "Attraction",
           y = "Mean Incremental EARS"
         ) +
+        coord_flip() +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
