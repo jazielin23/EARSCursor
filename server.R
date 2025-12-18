@@ -1103,7 +1103,7 @@ server <- function(input, output, session) {
   # NOTE: keep these UI outputs unconditional (no req()), otherwise cards render empty
   # until after the simulation runs.
   output$histplot_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("histplot", height = 900) else plotOutput("histplot", height = 900)
+    if (has_plotly) plotly::plotlyOutput("histplot", height = 820) else plotOutput("histplot", height = 820)
   })
   output$boxplot_park_ui <- renderUI({
     if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 460) else plotOutput("boxplot_park", height = 460)
@@ -1154,36 +1154,43 @@ server <- function(input, output, session) {
       }
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
-      # Order so high-Actuals items appear at the top
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
+      # Too many categories makes bars appear "missing" (they get ultra-thin).
+      # Show top N by Actuals (already sorted) for readability.
+      top_n <- 35L
+      df_mean <- head(df_mean, top_n)
+      df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
 
-      # Horizontal bars so all categories remain visible
-      p <- ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
+      # Vertical bars (x = attraction, y = incremental impact)
+      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
         geom_col() +
         labs(
           title = NULL,
-          x = "Average Incremental EARS (% of Park Actuals)",
-          y = NULL
+          x = sprintf("Attraction (top %d by Actuals)", top_n),
+          y = "Average Incremental EARS (% of Park Actuals)"
         ) +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_x_continuous(labels = scales::percent_format(scale = 1))
+        scale_y_continuous(
+          labels = scales::percent_format(scale = 1),
+          breaks = scales::breaks_width(0.25)
+        )
 
       plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
       # Finer tick marks on the value axis and give x labels enough room
       plotly::layout(
         plt,
-        height = 900,
-        margin = list(l = 260, r = 20, t = 20, b = 60),
-        xaxis = list(dtick = 0.25, tickformat = ".2f", ticksuffix = "%", automargin = TRUE),
-        yaxis = list(automargin = TRUE)
+        height = 820,
+        margin = list(l = 80, r = 20, t = 20, b = 300),
+        xaxis = list(automargin = TRUE),
+        yaxis = list(dtick = 0.25, automargin = TRUE)
       )
     })
   } else {
@@ -1224,25 +1231,31 @@ server <- function(input, output, session) {
       }
 
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
+      top_n <- 35L
+      df_mean <- head(df_mean, top_n)
+      df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
   
-      ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
+      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
         geom_col() +
         labs(
           title = NULL,
-          x = "Average Incremental EARS (% of Park Actuals)",
-          y = NULL
+          x = sprintf("Attraction (top %d by Actuals)", top_n),
+          y = "Average Incremental EARS (% of Park Actuals)"
         ) +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_x_continuous(labels = scales::percent_format(scale = 1))
+        scale_y_continuous(
+          labels = scales::percent_format(scale = 1),
+          breaks = scales::breaks_width(0.25)
+        )
     })
   }
  
