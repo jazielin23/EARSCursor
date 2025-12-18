@@ -1107,16 +1107,27 @@ server <- function(input, output, session) {
     if (is.null(sim_df) || !is.data.frame(sim_df) || nrow(sim_df) == 0) return(900L)
 
     df_park <- sim_df %>% filter(Park == input$selected_park)
+    total_actuals <- df_park %>%
+      group_by(sim_run) %>%
+      summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+      summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+      pull(1)
+
     df_name_simrun <- df_park %>%
       group_by(NAME, sim_run) %>%
-      summarise(Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE), .groups = "drop")
+      summarise(
+        Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
+
     df_mean <- df_name_simrun %>%
       group_by(NAME) %>%
-      summarise(Mean_Inc_EARS = mean(Sum_Inc_EARS, na.rm = TRUE), .groups = "drop")
+      summarise(Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE), .groups = "drop")
 
     sim_inputs <- selected_exps_rv()
     if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
-    df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
+    df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
 
     n <- nrow(df_mean)
     # ~20-24px per bar works well in Dataiku; cap to avoid huge pages.
@@ -1144,6 +1155,12 @@ server <- function(input, output, session) {
       req(nrow(sim_df) > 0)
  
       df_park <- sim_df %>% filter(Park == input$selected_park)
+
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+        pull(1)
  
       df_name_simrun <- df_park %>%
         group_by(NAME, sim_run) %>%
@@ -1151,12 +1168,13 @@ server <- function(input, output, session) {
           Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
           Actuals = sum(Actual_EARS, na.rm = TRUE),
           .groups = "drop"
-        )
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
  
       df_mean <- df_name_simrun %>%
         group_by(NAME) %>%
         summarise(
-          Mean_Inc_EARS = mean(Sum_Inc_EARS, na.rm = TRUE),
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
           Actuals = sum(Actuals, na.rm = TRUE),
           .groups = "drop"
         ) %>%
@@ -1168,40 +1186,49 @@ server <- function(input, output, session) {
         df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
       }
 
-      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
+      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
       # Reset factor levels AFTER filtering to avoid Plotly/ggplotly spacing oddities
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(unique(df_mean$NAME)))
+      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
 
-      # Horizontal bars (via coord_flip) for readability with many categories
-      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
-        geom_col() +
+      # Vertical bars: x-axis is attraction (requested) + single-color bars
+      bar_color <- "#2C7FB8"
+      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct)) +
+        geom_col(fill = bar_color) +
         geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
         labs(
           title = NULL,
           x = "Attraction",
-          y = "Mean Incremental EARS"
+          y = "Average Incremental EARS (% of Park Actuals)"
         ) +
-        coord_flip() +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
-          axis.text.y = element_text(family = "Century Gothic"),
           legend.position = "none"
         ) +
-        scale_fill_brewer(palette = "Dark2") +
-        scale_y_continuous(labels = scales::comma)
+        scale_y_continuous(labels = scales::percent_format(scale = 1))
+
+      n_cats <- length(unique(df_mean$NAME))
+      width_px <- max(1200, n_cats * 18)
 
       plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
       h <- get_histplot_height()
-      plotly::layout(
+      plt <- plt |>
+        plotly::layout(
+          height = h,
+          width = width_px,
+          bargap = 0.05,
+          margin = list(l = 80, r = 20, t = 20, b = 320),
+          xaxis = list(type = "category", automargin = TRUE, categoryorder = "array", categoryarray = as.character(unique(df_mean$NAME))),
+          yaxis = list(automargin = TRUE, tickformat = ".2f", ticksuffix = "%")
+        ) |>
+        plotly::config(responsive = FALSE)
+
+      htmlwidgets::onRender(
         plt,
-        height = h,
-        margin = list(l = 260, r = 20, t = 20, b = 60),
-        # coord_flip() can swap axes; set both defensively
-        xaxis = list(tickformat = ",.0f", automargin = TRUE),
-        yaxis = list(automargin = TRUE)
+        sprintf("function(el,x){el.style.width='%dpx'; if(window.Plotly){Plotly.Plots.resize(el);} }", width_px)
       )
     })
   } else {
@@ -1210,6 +1237,12 @@ server <- function(input, output, session) {
       req(nrow(sim_df) > 0)
   
       df_park <- sim_df %>% filter(Park == input$selected_park)
+
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+        pull(1)
   
       df_name_simrun <- df_park %>%
         group_by(NAME, sim_run) %>%
@@ -1217,12 +1250,13 @@ server <- function(input, output, session) {
           Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
           Actuals = sum(Actual_EARS, na.rm = TRUE),
           .groups = "drop"
-        )
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
   
       df_mean <- df_name_simrun %>%
         group_by(NAME) %>%
         summarise(
-          Mean_Inc_EARS = mean(Sum_Inc_EARS, na.rm = TRUE),
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
           Actuals = sum(Actuals, na.rm = TRUE),
           .groups = "drop"
         ) %>%
@@ -1234,28 +1268,26 @@ server <- function(input, output, session) {
         df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
       }
 
-      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
-      df_mean$NAME <- factor(df_mean$NAME, levels = rev(unique(df_mean$NAME)))
+      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
   
-      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
-        geom_col() +
+      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct)) +
+        geom_col(fill = "#2C7FB8") +
         geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
         labs(
           title = NULL,
           x = "Attraction",
-          y = "Mean Incremental EARS"
+          y = "Average Incremental EARS (% of Park Actuals)"
         ) +
-        coord_flip() +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
-          axis.text.y = element_text(family = "Century Gothic"),
           legend.position = "none"
         ) +
-        scale_fill_brewer(palette = "Dark2") +
-        scale_y_continuous(labels = scales::comma)
+        scale_y_continuous(labels = scales::percent_format(scale = 1))
     })
   }
  
