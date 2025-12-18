@@ -121,16 +121,16 @@ ui <- page_sidebar(
     nav_panel(
       "Plots",
       div(class = "plot-title", "Overall Experience Impact (bootstrap 95% CI)"),
-      bslib::layout_column_wrap(
+      bslib::layout_column_wrap(width = 1 ,bslib::layout_column_wrap(
         width = 1 / 3,
-        card(class = "plot-card", style = "min-height: 760px;", uiOutput("boxplot_park_ui")),
-        card(class = "plot-card", style = "min-height: 760px;", uiOutput("boxplot_lifestage_ui")),
-        card(class = "plot-card", style = "min-height: 760px;", uiOutput("boxplot_genre_ui")),
+        card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_park_ui")),
+        card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_lifestage_ui")),
+        card(class = "plot-card", style = "min-height: 560px;", uiOutput("boxplot_genre_ui"))),
         div(class = "full-span", style = "margin-top: 12px;", div(class = "plot-title", "Cannibalization (ordered by Actuals)")),
         div(class = "full-span",
-            card(class = "plot-card", style = "min-height: 900px;", uiOutput("histplot_ui"))
+            card(class = "plot-card", style = "min-height: 700px;", uiOutput("histplot_ui"))
         )
-      ),
+     ),
       div(style = "height: 6px;")
     ),
     nav_panel(
