@@ -1149,15 +1149,16 @@ server <- function(input, output, session) {
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
       df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
 
-      # Horizontal bars (axes swapped) for readability with many categories
-      p <- ggplot(df_mean, aes(x = Mean_Inc_EARS, y = NAME, fill = NAME)) +
+      # Horizontal bars (via coord_flip) for readability with many categories
+      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
         geom_col() +
-        geom_vline(xintercept = 0, linewidth = 0.4, color = "#6c757d") +
+        geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
         labs(
           title = NULL,
-          x = "Mean Incremental EARS",
-          y = NULL
+          x = "Attraction",
+          y = "Mean Incremental EARS"
         ) +
+        coord_flip() +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
@@ -1167,7 +1168,7 @@ server <- function(input, output, session) {
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_x_continuous(labels = scales::comma)
+        scale_y_continuous(labels = scales::comma)
 
       plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
       plotly::layout(
@@ -1211,14 +1212,15 @@ server <- function(input, output, session) {
       df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS))
       df_mean$NAME <- factor(df_mean$NAME, levels = rev(df_mean$NAME))
   
-      ggplot(df_mean, aes(x = Mean_Inc_EARS, y = NAME, fill = NAME)) +
+      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS, fill = NAME)) +
         geom_col() +
-        geom_vline(xintercept = 0, linewidth = 0.4, color = "#6c757d") +
+        geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
         labs(
           title = NULL,
-          x = "Mean Incremental EARS",
-          y = NULL
+          x = "Attraction",
+          y = "Mean Incremental EARS"
         ) +
+        coord_flip() +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
@@ -1228,7 +1230,7 @@ server <- function(input, output, session) {
           legend.position = "none"
         ) +
         scale_fill_brewer(palette = "Dark2") +
-        scale_x_continuous(labels = scales::comma)
+        scale_y_continuous(labels = scales::comma)
     })
   }
  
