@@ -1136,7 +1136,7 @@ server <- function(input, output, session) {
 
   output$histplot_ui <- renderUI({
     h <- get_histplot_height()
-    if (has_plotly) plotly::plotlyOutput("histplot", height = h) else plotOutput("histplot", height = h)
+    plotOutput("histplot", height = h)
   })
   output$boxplot_park_ui <- renderUI({
     if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 460) else plotOutput("boxplot_park", height = 460)
@@ -1149,147 +1149,62 @@ server <- function(input, output, session) {
   })
 
   # ---- Plots ----
-  if (has_plotly) {
-    output$histplot <- plotly::renderPlotly({
-      sim_df <- simulation_results()
-      req(nrow(sim_df) > 0)
- 
-      df_park <- sim_df %>% filter(Park == input$selected_park)
+  # Cannibalization: keep as static ggplot (non-plotly) for reliability with many categories.
+  output$histplot <- renderPlot({
+    sim_df <- simulation_results()
+    req(nrow(sim_df) > 0)
 
-      total_actuals <- df_park %>%
-        group_by(sim_run) %>%
-        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
-        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
-        pull(1)
- 
-      df_name_simrun <- df_park %>%
-        group_by(NAME, sim_run) %>%
-        summarise(
-          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
-          Actuals = sum(Actual_EARS, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
- 
-      df_mean <- df_name_simrun %>%
-        group_by(NAME) %>%
-        summarise(
-          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
-          Actuals = sum(Actuals, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        arrange(desc(Actuals))
- 
-      # Remove experiences used as simulation inputs from cannibalization view
-      sim_inputs <- selected_exps_rv()
-      if (length(sim_inputs) > 0) {
-        df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
-      }
+    df_park <- sim_df %>% filter(Park == input$selected_park)
 
-      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
-      # Reset factor levels AFTER filtering to avoid Plotly/ggplotly spacing oddities
-      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
+    total_actuals <- df_park %>%
+      group_by(sim_run) %>%
+      summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+      summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+      pull(1)
 
-      # Vertical bars: x-axis is attraction (requested) + single-color bars
-      bar_color <- "#2C7FB8"
-      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct)) +
-        geom_col(fill = bar_color) +
-        geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
-        labs(
-          title = NULL,
-          x = "Attraction",
-          y = "Average Incremental EARS (% of Park Actuals)"
-        ) +
-        theme_minimal(base_family = "Century Gothic") +
-        theme(
-          plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
-          axis.title.x = element_text(family = "Century Gothic"),
-          axis.title.y = element_text(family = "Century Gothic"),
-          legend.position = "none"
-        ) +
-        scale_y_continuous(labels = scales::percent_format(scale = 1))
+    df_name_simrun <- df_park %>%
+      group_by(NAME, sim_run) %>%
+      summarise(
+        Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+        Actuals = sum(Actual_EARS, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
 
-      n_cats <- length(unique(df_mean$NAME))
-      width_px <- max(1200, n_cats * 18)
+    df_mean <- df_name_simrun %>%
+      group_by(NAME) %>%
+      summarise(
+        Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
+        Actuals = sum(Actuals, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      arrange(desc(Actuals))
 
-      plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
-      h <- get_histplot_height()
-      plt <- plt |>
-        plotly::layout(
-          height = h,
-          width = width_px,
-          bargap = 0.05,
-          margin = list(l = 80, r = 20, t = 20, b = 320),
-          xaxis = list(type = "category", automargin = TRUE, categoryorder = "array", categoryarray = as.character(unique(df_mean$NAME))),
-          yaxis = list(automargin = TRUE, tickformat = ".2f", ticksuffix = "%")
-        ) |>
-        plotly::config(responsive = FALSE)
+    # Remove experiences used as simulation inputs from cannibalization view
+    sim_inputs <- selected_exps_rv()
+    if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
 
-      htmlwidgets::onRender(
-        plt,
-        sprintf("function(el,x){el.style.width='%dpx'; if(window.Plotly){Plotly.Plots.resize(el);} }", width_px)
-      )
-    })
-  } else {
-    output$histplot <- renderPlot({
-      sim_df <- simulation_results()
-      req(nrow(sim_df) > 0)
-  
-      df_park <- sim_df %>% filter(Park == input$selected_park)
+    df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+    df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
 
-      total_actuals <- df_park %>%
-        group_by(sim_run) %>%
-        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
-        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
-        pull(1)
-  
-      df_name_simrun <- df_park %>%
-        group_by(NAME, sim_run) %>%
-        summarise(
-          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
-          Actuals = sum(Actual_EARS, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
-  
-      df_mean <- df_name_simrun %>%
-        group_by(NAME) %>%
-        summarise(
-          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
-          Actuals = sum(Actuals, na.rm = TRUE),
-          .groups = "drop"
-        ) %>%
-        arrange(desc(Actuals))
-  
-      # Remove experiences used as simulation inputs from cannibalization view
-      sim_inputs <- selected_exps_rv()
-      if (length(sim_inputs) > 0) {
-        df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
-      }
-
-      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
-      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
-  
-      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct)) +
-        geom_col(fill = "#2C7FB8") +
-        geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
-        labs(
-          title = NULL,
-          x = "Attraction",
-          y = "Average Incremental EARS (% of Park Actuals)"
-        ) +
-        theme_minimal(base_family = "Century Gothic") +
-        theme(
-          plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
-          axis.title.x = element_text(family = "Century Gothic"),
-          axis.title.y = element_text(family = "Century Gothic"),
-          legend.position = "none"
-        ) +
-        scale_y_continuous(labels = scales::percent_format(scale = 1))
-    })
-  }
+    ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct)) +
+      geom_col(fill = "#2C7FB8") +
+      geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
+      labs(
+        title = NULL,
+        x = "Attraction",
+        y = "Average Incremental EARS (% of Park Actuals)"
+      ) +
+      theme_minimal(base_family = "Century Gothic") +
+      theme(
+        plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
+        axis.title.x = element_text(family = "Century Gothic"),
+        axis.title.y = element_text(family = "Century Gothic"),
+        legend.position = "none"
+      ) +
+      scale_y_continuous(labels = scales::percent_format(scale = 1))
+  })
  
   output$boxplot_park <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
