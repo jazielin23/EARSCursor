@@ -59,7 +59,7 @@ ui <- page_sidebar(
       #boxplot_genre { height: 800px !important; }
       #histplot { height: 1150px !important; }
 
-      /* Ensure plot cards don't introduce internal scrollbars */
+      /* Ensure plot cards do not introduce internal scrollbars */
       .plot-card, .plot-card .card-body { overflow: visible !important; }
     '))
   ),
@@ -156,4 +156,4 @@ ui <- page_sidebar(
   )
 )
 
-
+# End of file
