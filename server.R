@@ -1103,7 +1103,7 @@ server <- function(input, output, session) {
   # NOTE: keep these UI outputs unconditional (no req()), otherwise cards render empty
   # until after the simulation runs.
   output$histplot_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("histplot", height = 1200) else plotOutput("histplot", height = 1200)
+    if (has_plotly) plotly::plotlyOutput("histplot", height = 800) else plotOutput("histplot", height = 800)
   })
   output$boxplot_park_ui <- renderUI({
     if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 460) else plotOutput("boxplot_park", height = 460)
@@ -1182,7 +1182,7 @@ server <- function(input, output, session) {
       # Finer tick marks on the value axis and give x labels enough room
       plotly::layout(
         plt,
-        height = 1200,
+        height = 800,
         margin = list(l = 80, r = 20, t = 20, b = 280),
         xaxis = list(automargin = TRUE),
         yaxis = list(dtick = 0.25, automargin = TRUE)
