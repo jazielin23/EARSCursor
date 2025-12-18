@@ -1100,17 +1100,26 @@ server <- function(input, output, session) {
   })
  
   # ---- Plot output selectors (plotly optional) ----
+  histplot_height <- reactive({
+    sim_df <- simulation_results()
+    req(nrow(sim_df) > 0)
+    n_items <- sim_df %>% filter(Park == input$selected_park) %>% distinct(NAME) %>% nrow()
+    # ~26px per category + padding; cap to keep page reasonable
+    min(1800, max(650, 26 * n_items + 200))
+  })
+
   output$histplot_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("histplot", height = 950) else plotOutput("histplot", height = 950)
+    h <- histplot_height()
+    if (has_plotly) plotly::plotlyOutput("histplot", height = h) else plotOutput("histplot", height = h)
   })
   output$boxplot_park_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 800) else plotOutput("boxplot_park", height = 800)
+    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 520) else plotOutput("boxplot_park", height = 520)
   })
   output$boxplot_lifestage_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 700) else plotOutput("boxplot_lifestage", height = 700)
+    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 520) else plotOutput("boxplot_lifestage", height = 520)
   })
   output$boxplot_genre_ui <- renderUI({
-    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 700) else plotOutput("boxplot_genre", height = 700)
+    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 520) else plotOutput("boxplot_genre", height = 520)
   })
 
   # ---- Plots ----
@@ -1147,17 +1156,18 @@ server <- function(input, output, session) {
  
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
  
-      p <- ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
+      # Horizontal bars so long attraction lists remain readable
+      p <- ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
         geom_col() +
         labs(
           title = NULL,
-          x = "Attraction",
-          y = "Average Incremental EARS (% of Park Actuals)"
+          x = "Average Incremental EARS (% of Park Actuals)",
+          y = NULL
         ) +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
+          axis.text.x = element_text(family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
@@ -1166,7 +1176,16 @@ server <- function(input, output, session) {
         scale_fill_brewer(palette = "Dark2") +
         scale_y_continuous(labels = scales::percent_format(scale = 1))
 
-      plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 1150)
+      h <- histplot_height()
+      plt <- plotly::ggplotly(p, tooltip = c("x", "y"))
+      # Finer tick marks on the value axis and give y labels enough room
+      plotly::layout(
+        plt,
+        height = h,
+        margin = list(l = 220, r = 20, t = 20, b = 60),
+        xaxis = list(tickformat = ".2f", dtick = 0.25, ticksuffix = "%", automargin = TRUE),
+        yaxis = list(automargin = TRUE)
+      )
     })
   } else {
     output$histplot <- renderPlot({
@@ -1201,17 +1220,16 @@ server <- function(input, output, session) {
   
       df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
   
-      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
+      ggplot(df_mean, aes(x = Mean_Inc_EARS_Pct, y = NAME, fill = NAME)) +
         geom_col() +
         labs(
           title = NULL,
-          x = "Attraction",
-          y = "Average Incremental EARS (% of Park Actuals)"
+          x = "Average Incremental EARS (% of Park Actuals)",
+          y = NULL
         ) +
         theme_minimal(base_family = "Century Gothic") +
         theme(
           plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
           axis.title.x = element_text(family = "Century Gothic"),
           axis.title.y = element_text(family = "Century Gothic"),
           axis.text.y = element_text(family = "Century Gothic"),
@@ -1286,7 +1304,7 @@ server <- function(input, output, session) {
       ) +
       scale_x_continuous(labels = scales::percent_format(scale = 1))
 
-    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 900) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 520, margin = list(l = 60, r = 20, t = 20, b = 60)) else p
   })
  
   output$boxplot_lifestage <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
@@ -1351,7 +1369,7 @@ server <- function(input, output, session) {
       scale_x_discrete(labels = lifestage_labels) +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 800) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 520, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
   output$boxplot_genre <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
@@ -1407,7 +1425,7 @@ server <- function(input, output, session) {
       scale_fill_brewer(palette = "Dark2") +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
 
-    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 800) else p
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 520, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
   # ---- Details table ----
