@@ -1138,7 +1138,44 @@ server <- function(input, output, session) {
 
   get_exp_date_ranges <- function(input, selected_exps) {
     lapply(selected_exps, function(exp_name) {
-      input[[paste0("daterange_", exp_name)]]
+      is_closing <- input[[paste0("closing_", exp_name)]]
+      
+      if (isTRUE(is_closing)) {
+        # Closing permanently: use start date and far-future end (will map to full FY24)
+        start_date <- input[[paste0("closing_start_", exp_name)]]
+        if (is.null(start_date)) start_date <- Sys.Date()
+        # Use a date far enough in the future to cover multiple FYs
+        # This will map to the full remaining FY24 period
+        end_date <- as.Date("2099-12-31")
+        c(start_date, end_date)
+      } else {
+        # Normal date range
+        input[[paste0("daterange_", exp_name)]]
+      }
+    }) |> setNames(selected_exps)
+  }
+  
+  # Helper to get FY info for each experience (for summary breakdown)
+  get_exp_fy_info <- function(input, selected_exps) {
+    lapply(selected_exps, function(exp_name) {
+      is_closing <- input[[paste0("closing_", exp_name)]]
+      
+      if (isTRUE(is_closing)) {
+        start_date <- input[[paste0("closing_start_", exp_name)]]
+        if (is.null(start_date)) start_date <- Sys.Date()
+        list(
+          start = start_date,
+          end = as.Date("2099-12-31"),
+          is_permanent = TRUE
+        )
+      } else {
+        dr <- input[[paste0("daterange_", exp_name)]]
+        list(
+          start = dr[1],
+          end = dr[2],
+          is_permanent = FALSE
+        )
+      }
     }) |> setNames(selected_exps)
   }
  
@@ -1189,15 +1226,49 @@ server <- function(input, output, session) {
 
     lapply(exps, function(exp_name) {
       exp_label <- as.character(exp_data$Repository.Offering.Name[exp_data$name == exp_name][1])
-      input_id <- paste0("daterange_", exp_name)
-      bslib::tooltip(
-        dateRangeInput(
-          inputId = input_id,
-          label = exp_label,
-          start = Sys.Date() - 30,
-          end = Sys.Date()
+      date_input_id <- paste0("daterange_", exp_name)
+      closing_input_id <- paste0("closing_", exp_name)
+      
+      tagList(
+        div(
+          style = "margin-bottom: 4px;",
+          bslib::tooltip(
+            checkboxInput(
+              inputId = closing_input_id,
+              label = paste0(exp_label, " - Closing permanently"),
+              value = FALSE
+            ),
+            "Check if this experience is closing for good. End date will be set to end of FY24."
+          )
         ),
-        "Dates are mapped to FY24 using the DT fiscal calendar. If your range spans multiple fiscal years, each segment is mapped to equivalent FY24 dates based on day-of-fiscal-year position."
+        conditionalPanel(
+          condition = sprintf("!input.%s", closing_input_id),
+          bslib::tooltip(
+            dateRangeInput(
+              inputId = date_input_id,
+              label = "Date range",
+              start = Sys.Date() - 30,
+              end = Sys.Date()
+            ),
+            "Dates are mapped to FY24 using the DT fiscal calendar. If your range spans multiple fiscal years, each segment is mapped to equivalent FY24 dates."
+          )
+        ),
+        conditionalPanel(
+          condition = sprintf("input.%s", closing_input_id),
+          helpText(
+            style = "font-size: 0.9em; color: #666; margin-left: 24px;",
+            "Will simulate as closed from start date through end of FY24."
+          ),
+          bslib::tooltip(
+            dateInput(
+              inputId = paste0("closing_start_", exp_name),
+              label = "Closure start date",
+              value = Sys.Date()
+            ),
+            "When does/did the experience close?"
+          )
+        ),
+        tags$hr(style = "margin: 8px 0;")
       )
     })
   })
@@ -1267,6 +1338,45 @@ server <- function(input, output, session) {
     )
   })
  
+  # ---- FY breakdown info ----
+  fy_breakdown_info <- reactive({
+    exps <- selected_exps_rv()
+    if (length(exps) == 0) return(NULL)
+    
+    exp_info <- get_exp_fy_info(input, exps)
+    
+    # Collect all unique FYs across all experiences
+    all_fys <- list()
+    for (exp_name in names(exp_info)) {
+      info <- exp_info[[exp_name]]
+      segments <- split_date_range_by_fy(info$start, info$end, NULL)
+      for (seg in segments) {
+        fy <- seg$fy
+        if (fy >= 2024 && fy <= 2030) {  # Reasonable FY range
+          if (is.null(all_fys[[as.character(fy)]])) {
+            all_fys[[as.character(fy)]] <- list(
+              fy = fy,
+              start = seg$start,
+              end = seg$end
+            )
+          } else {
+            # Expand range if needed
+            all_fys[[as.character(fy)]]$start <- min(all_fys[[as.character(fy)]]$start, seg$start)
+            all_fys[[as.character(fy)]]$end <- max(all_fys[[as.character(fy)]]$end, seg$end)
+          }
+        }
+      }
+    }
+    
+    # Sort by FY
+    all_fys <- all_fys[order(as.integer(names(all_fys)))]
+    
+    list(
+      experiences = exp_info,
+      fiscal_years = all_fys
+    )
+  })
+  
   # ---- Summary helpers ----
   park_summary <- reactive({
     sim_df <- simulation_results()
@@ -1295,10 +1405,49 @@ server <- function(input, output, session) {
     B <- 2000L
     boot_means <- replicate(B, mean(sample(x, size = length(x), replace = TRUE), na.rm = TRUE))
     ci <- stats::quantile(boot_means, probs = c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+    
+    # Calculate per-FY impact estimates
+    fy_info <- fy_breakdown_info()
+    fy_summaries <- list()
+    
+    if (!is.null(fy_info) && length(fy_info$fiscal_years) > 0) {
+      for (fy_name in names(fy_info$fiscal_years)) {
+        fy_data <- fy_info$fiscal_years[[fy_name]]
+        fy <- fy_data$fy
+        
+        # Calculate the proportion of FY24 that this FY segment maps to
+        fy24_ranges <- map_date_range_to_fy24(fy_data$start, fy_data$end, NULL)
+        
+        # Calculate days covered in FY24
+        total_days <- 0
+        for (rng in fy24_ranges) {
+          total_days <- total_days + as.integer(rng[2] - rng[1]) + 1
+        }
+        
+        # FY24 is approximately 362 days (Oct 1 2023 to Sep 27 2024)
+        fy24_total_days <- 362
+        proportion <- min(1, total_days / fy24_total_days)
+        
+        # Estimate FY-specific impact (proportional to days affected)
+        fy_mu <- mu * proportion
+        fy_ci <- ci * proportion
+        
+        fy_summaries[[fy_name]] <- list(
+          fy = fy,
+          start = fy_data$start,
+          end = fy_data$end,
+          days_affected = total_days,
+          proportion = proportion,
+          mu = fy_mu,
+          ci = fy_ci
+        )
+      }
+    }
 
     list(
       total_actuals = total_actuals,
       overall = df_overall,
+      fy_summaries = fy_summaries,
       mu = mu,
       ci = ci
     )
@@ -1307,21 +1456,52 @@ server <- function(input, output, session) {
   output$summary_boxes <- renderUI({
     s <- park_summary()
 
-    layout_column_wrap(
+    # Overall summary boxes
+    overall_boxes <- layout_column_wrap(
       width = 1 / 3,
       value_box(
         title = "Overall impact (mean)",
-        value = sprintf("%.2f%%", s$mu)
+        value = sprintf("%.2f%%", s$mu),
+        theme = "primary"
       ),
       value_box(
         title = "95% CI (bootstrap)",
-        value = sprintf("%.2f%% to %.2f%%", s$ci[1], s$ci[2])
+        value = sprintf("%.2f%% to %.2f%%", s$ci[1], s$ci[2]),
+        theme = "primary"
       ),
       value_box(
         title = "Runs",
-        value = as.character(input$n_runs)
+        value = as.character(input$n_runs),
+        theme = "secondary"
       )
     )
+    
+    # FY breakdown boxes (if multiple FYs affected)
+    fy_boxes <- NULL
+    if (length(s$fy_summaries) > 1) {
+      fy_box_list <- lapply(names(s$fy_summaries), function(fy_name) {
+        fy_sum <- s$fy_summaries[[fy_name]]
+        value_box(
+          title = sprintf("FY%s Impact", substr(fy_name, 3, 4)),
+          value = sprintf("%.2f%%", fy_sum$mu),
+          theme = "info",
+          p(style = "font-size: 0.85em; margin-top: 4px;",
+            sprintf("%.0f%% of year affected", fy_sum$proportion * 100))
+        )
+      })
+      
+      fy_boxes <- tagList(
+        tags$hr(),
+        h5("Impact by Fiscal Year", style = "margin-top: 12px;"),
+        helpText("Estimated impact for each fiscal year covered by the closure dates."),
+        layout_column_wrap(
+          width = 1 / length(s$fy_summaries),
+          !!!fy_box_list
+        )
+      )
+    }
+    
+    tagList(overall_boxes, fy_boxes)
   })
 
   output$summary_text <- renderUI({
@@ -1341,13 +1521,48 @@ server <- function(input, output, session) {
     )
     park_name <- unname(park_labels[as.character(input$selected_park)])
     if (is.na(park_name) || is.null(park_name)) park_name <- as.character(input$selected_park)
+    
+    # Get experience date info
+    exp_info <- get_exp_fy_info(input, exps)
+    
+    # Build experience details with dates
+    exp_details <- lapply(exps, function(exp_name) {
+      info <- exp_info[[exp_name]]
+      exp_label <- as.character(labels$Repository.Offering.Name[labels$name == exp_name][1])
+      
+      if (info$is_permanent) {
+        tags$li(
+          strong(exp_label, ": "),
+          sprintf("Closing permanently from %s", format(info$start, "%b %d, %Y")),
+          span(class = "badge text-bg-danger", style = "margin-left: 8px;", "Permanent")
+        )
+      } else {
+        # Calculate which FYs are affected
+        segments <- split_date_range_by_fy(info$start, info$end, NULL)
+        fys_affected <- unique(sapply(segments, function(s) s$fy))
+        fys_affected <- fys_affected[fys_affected >= 2024 & fys_affected <= 2030]
+        fy_str <- if (length(fys_affected) > 0) {
+          paste0("FY", substr(as.character(fys_affected), 3, 4), collapse = ", ")
+        } else {
+          "FY24"
+        }
+        
+        tags$li(
+          strong(exp_label, ": "),
+          sprintf("%s to %s", format(info$start, "%b %d, %Y"), format(info$end, "%b %d, %Y")),
+          span(class = "badge text-bg-info", style = "margin-left: 8px;", fy_str)
+        )
+      }
+    })
 
     tagList(
-      h5("Inputs"),
+      h5("Simulation Inputs"),
       tags$ul(
         tags$li(strong("Park: "), park_name),
-        tags$li(strong("Experiences selected: "), paste(labels$Repository.Offering.Name, collapse = ", "))
-      )
+        tags$li(strong("Simulation runs: "), input$n_runs)
+      ),
+      h5("Experiences & Date Ranges", style = "margin-top: 12px;"),
+      tags$ul(exp_details)
     )
   })
  
