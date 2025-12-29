@@ -156,10 +156,20 @@ split_date_range_by_fy <- function(start_date, end_date, DT = NULL) {
     return(list())
   }
   
+  # Safety: limit to reasonable range (max 10 fiscal years)
+  # This prevents infinite loops if end_date is far in the future
+  max_end <- start_date + (365 * 10)
+  if (end_date > max_end) {
+    end_date <- max_end
+  }
+  
   segments <- list()
   current_start <- start_date
+  max_iterations <- 15  # Safety limit
+  iter <- 0
   
-  while (current_start <= end_date) {
+  while (current_start <= end_date && iter < max_iterations) {
+    iter <- iter + 1
     fy <- get_fiscal_year(current_start)
     
     # Get FY end from DT if available, otherwise use standard date
@@ -1141,12 +1151,12 @@ server <- function(input, output, session) {
       is_closing <- input[[paste0("closing_", exp_name)]]
       
       if (isTRUE(is_closing)) {
-        # Closing permanently: use start date and far-future end (will map to full FY24)
+        # Closing permanently: use start date and end of FY24 (since we map to FY24 anyway)
         start_date <- input[[paste0("closing_start_", exp_name)]]
         if (is.null(start_date)) start_date <- Sys.Date()
-        # Use a date far enough in the future to cover multiple FYs
-        # This will map to the full remaining FY24 period
-        end_date <- as.Date("2099-12-31")
+        # Use end of FY24 - this covers the full simulation period
+        # No need for far-future dates since everything maps to FY24
+        end_date <- as.Date("2024-09-27")
         c(start_date, end_date)
       } else {
         # Normal date range
@@ -1165,7 +1175,7 @@ server <- function(input, output, session) {
         if (is.null(start_date)) start_date <- Sys.Date()
         list(
           start = start_date,
-          end = as.Date("2099-12-31"),
+          end = as.Date("2024-09-27"),  # End of FY24
           is_permanent = TRUE
         )
       } else {
