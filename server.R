@@ -9,63 +9,133 @@ library(scales)
 library(bslib)
 
 ## -----------------------------------------------------------------------------
-## Fiscal Year Date Mapping Utilities
+## Fiscal Year Date Mapping Utilities (using DT fiscal calendar table)
 ## -----------------------------------------------------------------------------
-## FY24 runs from 2023-10-01 to 2024-09-27 (approximately 52 weeks).
 ## These functions map user-input dates (which may be in future fiscal years)
-## back to equivalent FY24 dates for simulation purposes.
+## back to equivalent FY24 dates for simulation purposes, using the DT table
+## which contains the actual Disney fiscal calendar.
 
-#' Get the fiscal year for a given date
-#' FY starts on October 1 and ends on September 30 (approximately)
+#' Build a fiscal calendar lookup from the DT table
+#' @param DT The fiscal calendar data frame with CLNDR_DT and fiscal columns
+#' @return A data frame with calendar dates and their fiscal year/quarter info
+build_fiscal_calendar <- function(DT) {
+  # Ensure date column is properly formatted
+
+  DT$CLNDR_DT <- as.Date(DT$CLNDR_DT)
+  
+  # Get fiscal year from DT - assumes FSCL_YR_NB or similar column exists
+  # If not, derive from fiscal quarter pattern
+  if ("FSCL_YR_NB" %in% names(DT)) {
+    DT$fiscal_year <- DT$FSCL_YR_NB
+  } else {
+    # Derive fiscal year from date (FY starts Oct 1)
+    yr <- as.integer(format(DT$CLNDR_DT, "%Y"))
+    mo <- as.integer(format(DT$CLNDR_DT, "%m"))
+    DT$fiscal_year <- ifelse(mo >= 10, yr + 1L, yr)
+  }
+  
+  # Add day-of-fiscal-year for mapping
+  DT <- DT[order(DT$CLNDR_DT), ]
+  
+  # For each fiscal year, calculate day number within that FY
+  DT$fy_day <- ave(seq_len(nrow(DT)), DT$fiscal_year, FUN = seq_along)
+  
+  DT
+}
+
+#' Get the fiscal year for a given date (fallback if DT not available)
 #' @param d A Date object
-#' @return Integer fiscal year (e.g., 2024 for dates from Oct 2023 to Sep 2024)
+#' @return Integer fiscal year
 get_fiscal_year <- function(d) {
-
   d <- as.Date(d)
   yr <- as.integer(format(d, "%Y"))
   mo <- as.integer(format(d, "%m"))
-  # If month >= October, we're in the next fiscal year
   ifelse(mo >= 10, yr + 1L, yr)
 }
 
-#' Get the start date of a fiscal year
-#' @param fy Integer fiscal year
-#' @return Date object for October 1 of the prior calendar year
-get_fy_start <- function(fy) {
-  as.Date(paste0(fy - 1L, "-10-01"))
+#' Get FY start/end dates from DT table
+#' @param DT Fiscal calendar table
+#' @param fy Fiscal year
+#' @return List with start and end dates
+get_fy_bounds_from_dt <- function(DT, fy) {
+  DT$CLNDR_DT <- as.Date(DT$CLNDR_DT)
+  
+  # Derive fiscal year if not present
+  if (!"fiscal_year" %in% names(DT)) {
+    yr <- as.integer(format(DT$CLNDR_DT, "%Y"))
+    mo <- as.integer(format(DT$CLNDR_DT, "%m"))
+    DT$fiscal_year <- ifelse(mo >= 10, yr + 1L, yr)
+  }
+  
+  fy_dates <- DT$CLNDR_DT[DT$fiscal_year == fy]
+  if (length(fy_dates) == 0) {
+    # Fallback to standard dates
+    return(list(
+      start = as.Date(paste0(fy - 1L, "-10-01")),
+      end = as.Date(paste0(fy, "-09-30"))
+    ))
+  }
+  
+  list(
+    start = min(fy_dates),
+    end = max(fy_dates)
+  )
 }
 
-#' Get the end date of a fiscal year (September 30)
-#' @param fy Integer fiscal year
-#' @return Date object for September 30 of the fiscal year
-get_fy_end <- function(fy) {
-  as.Date(paste0(fy, "-09-30"))
-}
-
-#' Map a single date to its equivalent FY24 date
-#' Preserves the "day within fiscal year" position
+#' Map a single date to its equivalent FY24 date using DT calendar
 #' @param d A Date object
+#' @param DT Fiscal calendar table
 #' @return Date object in FY24 with same position within the fiscal year
+map_date_to_fy24_with_dt <- function(d, DT) {
+  d <- as.Date(d)
+  source_fy <- get_fiscal_year(d)
+  
+  if (source_fy == 2024L) {
+    return(d)  # Already in FY24
+  }
+  
+  DT$CLNDR_DT <- as.Date(DT$CLNDR_DT)
+  
+  # Get bounds for source FY and FY24
+
+  source_bounds <- get_fy_bounds_from_dt(DT, source_fy)
+  fy24_bounds <- get_fy_bounds_from_dt(DT, 2024L)
+  
+  # Calculate day position within source FY
+  days_into_fy <- as.integer(d - source_bounds$start)
+  
+  # Map to same position in FY24
+
+  mapped <- fy24_bounds$start + days_into_fy
+  
+  # Clamp to FY24 bounds
+  if (mapped > fy24_bounds$end) mapped <- fy24_bounds$end
+  if (mapped < fy24_bounds$start) mapped <- fy24_bounds$start
+  
+  mapped
+}
+
+#' Fallback: Map a single date to FY24 without DT table
+#' @param d A Date object
+#' @return Date in FY24
 map_date_to_fy24 <- function(d) {
   d <- as.Date(d)
   fy <- get_fiscal_year(d)
   
   if (fy == 2024L) {
-    return(d)  # Already in FY24
-
+    return(d)
   }
   
   # Calculate days since start of source fiscal year
-  fy_start_source <- get_fy_start(fy)
+  fy_start_source <- as.Date(paste0(fy - 1L, "-10-01"))
   days_into_fy <- as.integer(d - fy_start_source)
   
   # Map to same position in FY24
   fy24_start <- as.Date("2023-10-01")
-  fy24_end <- as.Date("2024-09-27")  # Actual FY24 end from your data
+  fy24_end <- as.Date("2024-09-27")
   
   mapped <- fy24_start + days_into_fy
   
-
   # Clamp to FY24 bounds
   if (mapped > fy24_end) mapped <- fy24_end
   if (mapped < fy24_start) mapped <- fy24_start
@@ -73,11 +143,12 @@ map_date_to_fy24 <- function(d) {
   mapped
 }
 
-#' Split a date range by fiscal year boundaries
+#' Split a date range by fiscal year boundaries using DT calendar
 #' @param start_date Start of range
 #' @param end_date End of range
+#' @param DT Optional fiscal calendar table
 #' @return List of list(start=, end=, fy=) for each fiscal year segment
-split_date_range_by_fy <- function(start_date, end_date) {
+split_date_range_by_fy <- function(start_date, end_date, DT = NULL) {
   start_date <- as.Date(start_date)
   end_date <- as.Date(end_date)
   
@@ -90,9 +161,15 @@ split_date_range_by_fy <- function(start_date, end_date) {
   
   while (current_start <= end_date) {
     fy <- get_fiscal_year(current_start)
-    fy_end <- get_fy_end(fy)
     
-    # Segment ends at either the FY boundary or the user's end date
+    # Get FY end from DT if available, otherwise use standard date
+    if (!is.null(DT)) {
+      fy_bounds <- get_fy_bounds_from_dt(DT, fy)
+      fy_end <- fy_bounds$end
+    } else {
+      fy_end <- as.Date(paste0(fy, "-09-30"))
+    }
+    
     segment_end <- min(fy_end, end_date)
     
     segments <- c(segments, list(list(
@@ -101,34 +178,39 @@ split_date_range_by_fy <- function(start_date, end_date) {
       fy = fy
     )))
     
-    # Move to next day (start of next FY)
     current_start <- segment_end + 1L
   }
   
   segments
 }
 
-#' Map a date range to equivalent FY24 date ranges
-#' If the input range spans multiple fiscal years, returns multiple FY24 ranges
+#' Map a date range to equivalent FY24 date ranges using DT calendar
 #' @param start_date Start of user's date range
 #' @param end_date End of user's date range
+#' @param DT Optional fiscal calendar table
 #' @return List of c(start_fy24, end_fy24) date pairs
-map_date_range_to_fy24 <- function(start_date, end_date) {
+map_date_range_to_fy24 <- function(start_date, end_date, DT = NULL) {
   start_date <- as.Date(start_date)
   end_date <- as.Date(end_date)
   
   # Split by fiscal year boundaries
-  segments <- split_date_range_by_fy(start_date, end_date)
+  segments <- split_date_range_by_fy(start_date, end_date, DT)
   
   # Map each segment to FY24
   fy24_ranges <- lapply(segments, function(seg) {
-    c(
-      map_date_to_fy24(seg$start),
-      map_date_to_fy24(seg$end)
-    )
+    if (!is.null(DT)) {
+      c(
+        map_date_to_fy24_with_dt(seg$start, DT),
+        map_date_to_fy24_with_dt(seg$end, DT)
+      )
+    } else {
+      c(
+        map_date_to_fy24(seg$start),
+        map_date_to_fy24(seg$end)
+      )
+    }
   })
   
-  # Merge overlapping/adjacent ranges for efficiency
   if (length(fy24_ranges) == 0) {
     return(list())
   }
@@ -142,7 +224,6 @@ map_date_range_to_fy24 <- function(start_date, end_date) {
     last <- merged[[length(merged)]]
     curr <- fy24_ranges[[i]]
     
-    # If current range overlaps or is adjacent to last, merge them
     if (curr[1] <= last[2] + 1) {
       merged[[length(merged)]] <- c(last[1], max(last[2], curr[2]))
     } else {
@@ -153,21 +234,7 @@ map_date_range_to_fy24 <- function(start_date, end_date) {
   merged
 }
 
-#' Check if a date falls within any of the FY24 date ranges
-#' @param d Date to check (should be a date from the FY24 survey data)
-#' @param fy24_ranges List of c(start, end) FY24 date ranges
-#' @return Logical
-date_in_fy24_ranges <- function(d, fy24_ranges) {
-  d <- as.Date(d)
-  for (rng in fy24_ranges) {
-    if (d >= rng[1] && d <= rng[2]) {
-      return(TRUE)
-    }
-  }
-  FALSE
-}
-
-#' Vectorized version: check which dates fall within FY24 ranges
+#' Vectorized: check which dates fall within FY24 ranges
 #' @param dates Vector of dates
 #' @param fy24_ranges List of c(start, end) FY24 date ranges
 #' @return Logical vector
@@ -217,6 +284,9 @@ run_simulation_simR_embedded <- function(
   SurveyDataCheck_new <- dkuReadDataset("FY24_prepared")
   POG_new <- dkuReadDataset("Charcter_Entertainment_POG")
   SurveyData_new <- dkuReadDataset("FY24_prepared")
+  
+  # Fiscal calendar table for date mapping
+  DT <- dkuReadDataset("DT")
 
   cl <- makeCluster(as.integer(num_cores))
   on.exit({
@@ -230,8 +300,8 @@ run_simulation_simR_embedded <- function(
     .combine = rbind,
     .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2", "reshape"),
     .export = c("meta_prepared_new", "AttQTR_new", "QTRLY_GC_new", "SurveyDataCheck_new", "POG_new", "SurveyData_new",
-                "yearauto", "park_for_sim", "exp_name", "exp_date_ranges", "maxFQ", "verbose",
-                "get_fiscal_year", "get_fy_start", "get_fy_end", "map_date_to_fy24",
+                "DT", "yearauto", "park_for_sim", "exp_name", "exp_date_ranges", "maxFQ", "verbose",
+                "get_fiscal_year", "get_fy_bounds_from_dt", "map_date_to_fy24", "map_date_to_fy24_with_dt",
                 "split_date_range_by_fy", "map_date_range_to_fy24", "dates_in_fy24_ranges")
   ) %dopar% {
     EARSFinal_Final <- c()
@@ -264,9 +334,9 @@ run_simulation_simR_embedded <- function(
         segments <- unique(SurveyData$newgroup[SurveyData$park == park])
         date_range <- exp_date_ranges[[name]]
         
-        # Map user's date range to FY24 equivalent ranges
+        # Map user's date range to FY24 equivalent ranges using DT fiscal calendar
         # This handles cases where user inputs future dates spanning multiple FYs
-        fy24_ranges <- map_date_range_to_fy24(date_range[1], date_range[2])
+        fy24_ranges <- map_date_range_to_fy24(date_range[1], date_range[2], DT)
         
         for (seg in segments) {
           # Use the mapped FY24 ranges to find matching survey data
@@ -1127,7 +1197,7 @@ server <- function(input, output, session) {
           start = Sys.Date() - 30,
           end = Sys.Date()
         ),
-        "Dates are automatically mapped to FY24 (Oct 2023 - Sep 2024). If your range spans multiple fiscal years, each segment is mapped to equivalent FY24 dates."
+        "Dates are mapped to FY24 using the DT fiscal calendar. If your range spans multiple fiscal years, each segment is mapped to equivalent FY24 dates based on day-of-fiscal-year position."
       )
     })
   })
