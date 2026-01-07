@@ -6,6 +6,248 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 library(scales)
+library(bslib)
+
+## -----------------------------------------------------------------------------
+## Fiscal Year Date Mapping Utilities (using DT fiscal calendar table)
+## -----------------------------------------------------------------------------
+## These functions map user-input dates (which may be in future fiscal years)
+## back to equivalent FY24 dates for simulation purposes, using the DT table
+## which contains the actual Disney fiscal calendar.
+
+#' Build a fiscal calendar lookup from the DT table
+#' @param DT The fiscal calendar data frame with CLNDR_DT and fiscal columns
+#' @return A data frame with calendar dates and their fiscal year/quarter info
+build_fiscal_calendar <- function(DT) {
+  # Ensure date column is properly formatted
+
+  DT$CLNDR_DT <- as.Date(DT$CLNDR_DT)
+  
+  # Get fiscal year from DT - assumes FSCL_YR_NB or similar column exists
+  # If not, derive from fiscal quarter pattern
+  if ("FSCL_YR_NB" %in% names(DT)) {
+    DT$fiscal_year <- DT$FSCL_YR_NB
+  } else {
+    # Derive fiscal year from date (FY starts Oct 1)
+    yr <- as.integer(format(DT$CLNDR_DT, "%Y"))
+    mo <- as.integer(format(DT$CLNDR_DT, "%m"))
+    DT$fiscal_year <- ifelse(mo >= 10, yr + 1L, yr)
+  }
+  
+  # Add day-of-fiscal-year for mapping
+  DT <- DT[order(DT$CLNDR_DT), ]
+  
+  # For each fiscal year, calculate day number within that FY
+  DT$fy_day <- ave(seq_len(nrow(DT)), DT$fiscal_year, FUN = seq_along)
+  
+  DT
+}
+
+#' Get the fiscal year for a given date (fallback if DT not available)
+#' @param d A Date object
+#' @return Integer fiscal year
+get_fiscal_year <- function(d) {
+  d <- as.Date(d)
+  yr <- as.integer(format(d, "%Y"))
+  mo <- as.integer(format(d, "%m"))
+  ifelse(mo >= 10, yr + 1L, yr)
+}
+
+#' Get FY start/end dates from DT table
+#' @param DT Fiscal calendar table
+#' @param fy Fiscal year
+#' @return List with start and end dates
+get_fy_bounds_from_dt <- function(DT, fy) {
+  DT$CLNDR_DT <- as.Date(DT$CLNDR_DT)
+  
+  # Derive fiscal year if not present
+  if (!"fiscal_year" %in% names(DT)) {
+    yr <- as.integer(format(DT$CLNDR_DT, "%Y"))
+    mo <- as.integer(format(DT$CLNDR_DT, "%m"))
+    DT$fiscal_year <- ifelse(mo >= 10, yr + 1L, yr)
+  }
+  
+  fy_dates <- DT$CLNDR_DT[DT$fiscal_year == fy]
+  if (length(fy_dates) == 0) {
+    # Fallback to standard dates
+    return(list(
+      start = as.Date(paste0(fy - 1L, "-10-01")),
+      end = as.Date(paste0(fy, "-09-30"))
+    ))
+  }
+  
+  list(
+    start = min(fy_dates),
+    end = max(fy_dates)
+  )
+}
+
+#' Map a single date to its equivalent FY24 date using DT calendar
+#' @param d A Date object
+#' @param DT Fiscal calendar table
+#' @return Date object in FY24 with same position within the fiscal year
+map_date_to_fy24_with_dt <- function(d, DT) {
+  d <- as.Date(d)
+  source_fy <- get_fiscal_year(d)
+  
+  if (source_fy == 2024L) {
+    return(d)  # Already in FY24
+  }
+  
+  DT$CLNDR_DT <- as.Date(DT$CLNDR_DT)
+  
+  # Get bounds for source FY and FY24
+
+  source_bounds <- get_fy_bounds_from_dt(DT, source_fy)
+  fy24_bounds <- get_fy_bounds_from_dt(DT, 2024L)
+  
+  # Calculate day position within source FY
+  days_into_fy <- as.integer(d - source_bounds$start)
+  
+  # Map to same position in FY24
+
+  mapped <- fy24_bounds$start + days_into_fy
+  
+  # Clamp to FY24 bounds
+  if (mapped > fy24_bounds$end) mapped <- fy24_bounds$end
+  if (mapped < fy24_bounds$start) mapped <- fy24_bounds$start
+  
+  mapped
+}
+
+#' Fallback: Map a single date to FY24 without DT table
+#' @param d A Date object
+#' @return Date in FY24
+map_date_to_fy24 <- function(d) {
+  d <- as.Date(d)
+  fy <- get_fiscal_year(d)
+  
+  if (fy == 2024L) {
+    return(d)
+  }
+  
+  # Calculate days since start of source fiscal year
+  fy_start_source <- as.Date(paste0(fy - 1L, "-10-01"))
+  days_into_fy <- as.integer(d - fy_start_source)
+  
+  # Map to same position in FY24
+  fy24_start <- as.Date("2023-10-01")
+  fy24_end <- as.Date("2024-09-27")
+  
+  mapped <- fy24_start + days_into_fy
+  
+  # Clamp to FY24 bounds
+  if (mapped > fy24_end) mapped <- fy24_end
+  if (mapped < fy24_start) mapped <- fy24_start
+  
+  mapped
+}
+
+#' Split a date range by fiscal year boundaries using DT calendar
+#' @param start_date Start of range
+#' @param end_date End of range
+#' @param DT Optional fiscal calendar table
+#' @return List of list(start=, end=, fy=) for each fiscal year segment
+split_date_range_by_fy <- function(start_date, end_date, DT = NULL) {
+  start_date <- as.Date(start_date)
+  end_date <- as.Date(end_date)
+  
+  if (start_date > end_date) {
+    return(list())
+  }
+  
+  segments <- list()
+  current_start <- start_date
+  
+  while (current_start <= end_date) {
+    fy <- get_fiscal_year(current_start)
+    
+    # Get FY end from DT if available, otherwise use standard date
+    if (!is.null(DT)) {
+      fy_bounds <- get_fy_bounds_from_dt(DT, fy)
+      fy_end <- fy_bounds$end
+    } else {
+      fy_end <- as.Date(paste0(fy, "-09-30"))
+    }
+    
+    segment_end <- min(fy_end, end_date)
+    
+    segments <- c(segments, list(list(
+      start = current_start,
+      end = segment_end,
+      fy = fy
+    )))
+    
+    current_start <- segment_end + 1L
+  }
+  
+  segments
+}
+
+#' Map a date range to equivalent FY24 date ranges using DT calendar
+#' @param start_date Start of user's date range
+#' @param end_date End of user's date range
+#' @param DT Optional fiscal calendar table
+#' @return List of c(start_fy24, end_fy24) date pairs
+map_date_range_to_fy24 <- function(start_date, end_date, DT = NULL) {
+  start_date <- as.Date(start_date)
+  end_date <- as.Date(end_date)
+  
+  # Split by fiscal year boundaries
+  segments <- split_date_range_by_fy(start_date, end_date, DT)
+  
+  # Map each segment to FY24
+  fy24_ranges <- lapply(segments, function(seg) {
+    if (!is.null(DT)) {
+      c(
+        map_date_to_fy24_with_dt(seg$start, DT),
+        map_date_to_fy24_with_dt(seg$end, DT)
+      )
+    } else {
+      c(
+        map_date_to_fy24(seg$start),
+        map_date_to_fy24(seg$end)
+      )
+    }
+  })
+  
+  if (length(fy24_ranges) == 0) {
+    return(list())
+  }
+  
+  # Sort by start date
+  fy24_ranges <- fy24_ranges[order(sapply(fy24_ranges, `[`, 1))]
+  
+  # Merge overlapping ranges
+  merged <- list(fy24_ranges[[1]])
+  for (i in seq_along(fy24_ranges)[-1]) {
+    last <- merged[[length(merged)]]
+    curr <- fy24_ranges[[i]]
+    
+    if (curr[1] <= last[2] + 1) {
+      merged[[length(merged)]] <- c(last[1], max(last[2], curr[2]))
+    } else {
+      merged <- c(merged, list(curr))
+    }
+  }
+  
+  merged
+}
+
+#' Vectorized: check which dates fall within FY24 ranges
+#' @param dates Vector of dates
+#' @param fy24_ranges List of c(start, end) FY24 date ranges
+#' @return Logical vector
+dates_in_fy24_ranges <- function(dates, fy24_ranges) {
+  dates <- as.Date(dates)
+  result <- rep(FALSE, length(dates))
+  
+  for (rng in fy24_ranges) {
+    result <- result | (dates >= rng[1] & dates <= rng[2])
+  }
+  
+  result
+}
  
 ## -----------------------------------------------------------------------------
 ## Embedded simulation runner (ported from Sim.R)
@@ -42,6 +284,9 @@ run_simulation_simR_embedded <- function(
   SurveyDataCheck_new <- dkuReadDataset("FY24_prepared")
   POG_new <- dkuReadDataset("Charcter_Entertainment_POG")
   SurveyData_new <- dkuReadDataset("FY24_prepared")
+  
+  # Fiscal calendar table for date mapping
+  DT <- dkuReadDataset("DT")
 
   cl <- makeCluster(as.integer(num_cores))
   on.exit({
@@ -55,7 +300,9 @@ run_simulation_simR_embedded <- function(
     .combine = rbind,
     .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2", "reshape"),
     .export = c("meta_prepared_new", "AttQTR_new", "QTRLY_GC_new", "SurveyDataCheck_new", "POG_new", "SurveyData_new",
-                "yearauto", "park_for_sim", "exp_name", "exp_date_ranges", "maxFQ", "verbose")
+                "DT", "yearauto", "park_for_sim", "exp_name", "exp_date_ranges", "maxFQ", "verbose",
+                "get_fiscal_year", "get_fy_bounds_from_dt", "map_date_to_fy24", "map_date_to_fy24_with_dt",
+                "split_date_range_by_fy", "map_date_range_to_fy24", "dates_in_fy24_ranges")
   ) %dopar% {
     EARSFinal_Final <- c()
     EARSx <- c()
@@ -86,12 +333,17 @@ run_simulation_simR_embedded <- function(
       if (ride_exists) {
         segments <- unique(SurveyData$newgroup[SurveyData$park == park])
         date_range <- exp_date_ranges[[name]]
+        
+        # Map user's date range to FY24 equivalent ranges using DT fiscal calendar
+        # This handles cases where user inputs future dates spanning multiple FYs
+        fy24_ranges <- map_date_range_to_fy24(date_range[1], date_range[2], DT)
+        
         for (seg in segments) {
+          # Use the mapped FY24 ranges to find matching survey data
           seg_idx <- which(
             SurveyData$park == park &
               SurveyData$newgroup == seg &
-              SurveyData$visdate_parsed >= as.Date(date_range[1]) &
-              SurveyData$visdate_parsed <= as.Date(date_range[2])
+              dates_in_fy24_ranges(SurveyData$visdate_parsed, fy24_ranges)
           )
           seg_data <- SurveyData[seg_idx, ]
           if (group_exists) {
@@ -880,17 +1132,50 @@ QTRLY_GC b on a.name=b.name and a.Park = b.Park")
  
 server <- function(input, output, session) {
  
+  has_plotly <- requireNamespace("plotly", quietly = TRUE)
+
   exp_data <- dkuReadDataset("MetaDataTool_Exp")
- 
-  get_selected_exps <- function(input, exp_data) {
-    exp_data$name[unlist(lapply(exp_data$name, function(nm) {
-      isTRUE(input[[paste0("exp_", nm)]])
-    }))]
-  }
- 
+
   get_exp_date_ranges <- function(input, selected_exps) {
     lapply(selected_exps, function(exp_name) {
-      input[[paste0("daterange_", exp_name)]]
+      is_closing <- input[[paste0("closing_", exp_name)]]
+      
+      if (isTRUE(is_closing)) {
+        # Closing permanently: use start date and far-future end (will map to full FY24)
+        start_date <- input[[paste0("closing_start_", exp_name)]]
+        if (is.null(start_date)) start_date <- Sys.Date()
+        # Use a date far enough in the future to cover multiple FYs
+        # This will map to the full remaining FY24 period
+        end_date <- as.Date("2099-12-31")
+        c(start_date, end_date)
+      } else {
+        # Normal date range
+        input[[paste0("daterange_", exp_name)]]
+      }
+    }) |> setNames(selected_exps)
+  }
+  
+  # Helper to get FY info for each experience (for summary breakdown)
+  get_exp_fy_info <- function(input, selected_exps) {
+    lapply(selected_exps, function(exp_name) {
+      is_closing <- input[[paste0("closing_", exp_name)]]
+      
+      if (isTRUE(is_closing)) {
+        start_date <- input[[paste0("closing_start_", exp_name)]]
+        if (is.null(start_date)) start_date <- Sys.Date()
+        list(
+          start = start_date,
+          end = as.Date("2099-12-31"),
+          is_permanent = TRUE
+        )
+      } else {
+        dr <- input[[paste0("daterange_", exp_name)]]
+        list(
+          start = dr[1],
+          end = dr[2],
+          is_permanent = FALSE
+        )
+      }
     }) |> setNames(selected_exps)
   }
  
@@ -915,166 +1200,568 @@ server <- function(input, output, session) {
     df <- exp_data[exp_data$Park == as.numeric(input$selected_park), ]
     selectizeInput(
       "selected_exps",
-      "Select Experiences:",
+      "Select experiences",
       choices = setNames(df$name, df$Repository.Offering.Name),
       multiple = TRUE,
-      options = list(placeholder = "Choose experiences...")
+      options = list(placeholder = "Choose one or more experiences...")
     )
   })
  
   selected_exps_rv <- reactiveVal(character(0))
  
   observeEvent(input$selected_exps, {
-    selected_exps_rv(input$selected_exps)
+    selected_exps_rv(if (is.null(input$selected_exps)) character(0) else input$selected_exps)
   })
  
   observe({
-    req(selected_exps_rv())
-    lapply(selected_exps_rv(), function(exp_name) {
-      observeEvent(input[[paste0("remove_", exp_name)]], {
-        new_exps <- setdiff(selected_exps_rv(), exp_name)
-        selected_exps_rv(new_exps)
-        updateSelectizeInput(session, "selected_exps", selected = new_exps)
-      }, ignoreInit = TRUE)
-    })
+    # keep this observer lightweight; removal buttons are no longer used
+    invisible(NULL)
   })
  
   output$selected_exp_dates <- renderUI({
-    req(selected_exps_rv())
-    lapply(selected_exps_rv(), function(exp_name) {
+    exps <- selected_exps_rv()
+    if (length(exps) == 0) {
+      return(helpText("Select one or more experiences to configure date ranges."))
+    }
+
+    lapply(exps, function(exp_name) {
       exp_label <- as.character(exp_data$Repository.Offering.Name[exp_data$name == exp_name][1])
-      fluidRow(
-        column(
-          7,
-          dateRangeInput(
-            inputId = paste0("daterange_", exp_name),
-            label = exp_label,
-            start = Sys.Date() - 30,
-            end = Sys.Date()
+      date_input_id <- paste0("daterange_", exp_name)
+      closing_input_id <- paste0("closing_", exp_name)
+      
+      tagList(
+        div(
+          style = "margin-bottom: 4px;",
+          bslib::tooltip(
+            checkboxInput(
+              inputId = closing_input_id,
+              label = paste0(exp_label, " - Closing permanently"),
+              value = FALSE
+            ),
+            "Check if this experience is closing for good. End date will be set to end of FY24."
           )
         ),
-        column(
-          2,
-          actionButton(
-            inputId = paste0("remove_", exp_name),
-            label = NULL,
-            icon = icon("times"),
-            style = "margin-top: 25px;"
+        conditionalPanel(
+          condition = sprintf("!input.%s", closing_input_id),
+          bslib::tooltip(
+            dateRangeInput(
+              inputId = date_input_id,
+              label = "Date range",
+              start = Sys.Date() - 30,
+              end = Sys.Date()
+            ),
+            "Dates are mapped to FY24 using the DT fiscal calendar. If your range spans multiple fiscal years, each segment is mapped to equivalent FY24 dates."
           )
-        )
+        ),
+        conditionalPanel(
+          condition = sprintf("input.%s", closing_input_id),
+          helpText(
+            style = "font-size: 0.9em; color: #666; margin-left: 24px;",
+            "Will simulate as closed from start date through end of FY24."
+          ),
+          bslib::tooltip(
+            dateInput(
+              inputId = paste0("closing_start_", exp_name),
+              label = "Closure start date",
+              value = Sys.Date()
+            ),
+            "When does/did the experience close?"
+          )
+        ),
+        tags$hr(style = "margin: 8px 0;")
       )
     })
+  })
+
+  # ---- Lightweight status/progress UI (no shinyWidgets dependency) ----
+  sim_status <- reactiveVal(list(state = "idle", pct = 0, msg = ""))
+
+  output$sim_status_ui <- renderUI({
+    s <- sim_status()
+    state_badge <- switch(
+      s$state,
+      running = span(class = "badge text-bg-primary", "Running"),
+      done = span(class = "badge text-bg-success", "Done"),
+      error = span(class = "badge text-bg-danger", "Error"),
+      span(class = "badge text-bg-secondary", "Idle")
+    )
+
+    tagList(
+      state_badge,
+      tags$div(style = "height: 8px;"),
+      tags$progress(value = s$pct, max = 100, style = "width: 100%; height: 14px;"),
+      if (nzchar(s$msg)) tags$div(class = "text-muted", style = "margin-top: 6px; font-size: 0.95rem;", s$msg)
+    )
   })
  
   # ---- Run simulation ----
   simulation_results <- eventReactive(input$simulate, {
-    showModal(modalDialog(
-      title = "Simulation in Progress",
-      "Please wait while the simulation runs. This may take several minutes.",
-      footer = NULL,
-      easyClose = FALSE
-    ))
- 
     req(input$selected_park)
     exp_name <- selected_exps_rv()
-    req(length(exp_name) > 0)
+    validate(need(length(exp_name) > 0, "Select at least one experience to run the simulation."))
     exp_date_ranges <- get_exp_date_ranges(input, exp_name)
  
-    cat("Simulation Inputs:\n")
-    cat("Park:", as.numeric(input$selected_park), "\n")
-    cat("Experiences:", paste(exp_name, collapse = ", "), "\n")
-    cat("Date Ranges:\n")
-    print(exp_date_ranges)
-    cat("n_runs:", as.numeric(input$n_runs), "\n")
-    cat("num_cores:", 5, "\n")
-      
-print(list(
-  park = input$selected_park,
-  exp_name = selected_exps_rv(),
-  exp_date_ranges = get_exp_date_ranges(input, selected_exps_rv()),
-  n_runs = input$n_runs
-))
- 
-    result <- run_simulation(
-      park = as.numeric(input$selected_park),
-      exp_name = exp_name,
-      exp_date_ranges = exp_date_ranges,
-      n_runs = as.numeric(input$n_runs),
-      num_cores = 5
+    sim_status(list(state = "running", pct = 10, msg = "Simulation started…"))
+
+    withProgress(
+      message = "Running simulation…",
+      detail = "This can take a few minutes depending on number of runs.",
+      value = 0,
+      {
+        incProgress(0.1)
+
+        result <- tryCatch(
+          run_simulation(
+            park = as.numeric(input$selected_park),
+            exp_name = exp_name,
+            exp_date_ranges = exp_date_ranges,
+            n_runs = as.numeric(input$n_runs),
+            num_cores = 5
+          ),
+          error = function(e) {
+            sim_status(list(state = "error", pct = 0, msg = conditionMessage(e)))
+            stop(e)
+          }
+        )
+
+        # Clean up any invalid metrics that can break downstream summaries/plots.
+        # User request: remove rows where wEEx is negative.
+        if ("wEEx" %in% names(result)) {
+          result <- result[!(is.finite(result$wEEx) & result$wEEx < 0), , drop = FALSE]
+        }
+
+        incProgress(0.85)
+        sim_status(list(state = "done", pct = 100, msg = "Simulation complete."))
+        incProgress(0.05)
+        result
+      }
     )
- 
-    removeModal()
-    result
   })
  
-  # ---- Info text ----
-  sim_result <- eventReactive(input$simulate, {
-    selected_exps <- get_selected_exps(input, exp_data)
-    req(selected_exps)
-    sapply(selected_exps, function(exp_name) {
-      dr <- input[[paste0("daterange_", exp_name)]]
-      exp_label <- exp_data$Repository.Offering.Name[exp_data$name == exp_name]
-      paste0(exp_label, " (", exp_name, "): ", paste(dr, collapse = " to "))
-    })
+  # ---- FY breakdown info ----
+  fy_breakdown_info <- reactive({
+    exps <- selected_exps_rv()
+    if (length(exps) == 0) return(NULL)
+    
+    exp_info <- get_exp_fy_info(input, exps)
+    
+    # Collect all unique FYs across all experiences
+    all_fys <- list()
+    for (exp_name in names(exp_info)) {
+      info <- exp_info[[exp_name]]
+      segments <- split_date_range_by_fy(info$start, info$end, NULL)
+      for (seg in segments) {
+        fy <- seg$fy
+        if (fy >= 2024 && fy <= 2030) {  # Reasonable FY range
+          if (is.null(all_fys[[as.character(fy)]])) {
+            all_fys[[as.character(fy)]] <- list(
+              fy = fy,
+              start = seg$start,
+              end = seg$end
+            )
+          } else {
+            # Expand range if needed
+            all_fys[[as.character(fy)]]$start <- min(all_fys[[as.character(fy)]]$start, seg$start)
+            all_fys[[as.character(fy)]]$end <- max(all_fys[[as.character(fy)]]$end, seg$end)
+          }
+        }
+      }
+    }
+    
+    # Sort by FY
+    all_fys <- all_fys[order(as.integer(names(all_fys)))]
+    
+    list(
+      experiences = exp_info,
+      fiscal_years = all_fys
+    )
   })
- 
-  output$siminfo <- renderText({
-    paste(sim_result(), collapse = "\n")
-  })
- 
-  # ---- Plots ----
-  output$histplot <- renderPlot({
+  
+  # ---- Summary helpers ----
+  park_summary <- reactive({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
- 
+
     df_park <- sim_df %>% filter(Park == input$selected_park)
- 
+    req(nrow(df_park) > 0)
+
     total_actuals <- df_park %>%
       group_by(sim_run) %>%
       summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
-      summarise(mean(Total_Actuals, na.rm = TRUE)) %>%
+      summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
       pull(1)
+
+    df_overall <- df_park %>%
+      group_by(sim_run) %>%
+      summarise(Inc_EARS = sum(Incremental_EARS, na.rm = TRUE), .groups = "drop") %>%
+      mutate(Inc_EARS_Pct = 100 * Inc_EARS / total_actuals) %>%
+      filter(is.finite(Inc_EARS_Pct))
+
+    x <- df_overall$Inc_EARS_Pct
+    x <- x[is.finite(x)]
+    mu <- mean(x, na.rm = TRUE)
+
+    set.seed(1)
+    B <- 2000L
+    boot_means <- replicate(B, mean(sample(x, size = length(x), replace = TRUE), na.rm = TRUE))
+    ci <- stats::quantile(boot_means, probs = c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+    
+    # Calculate per-FY impact estimates
+    fy_info <- fy_breakdown_info()
+    fy_summaries <- list()
+    
+    if (!is.null(fy_info) && length(fy_info$fiscal_years) > 0) {
+      for (fy_name in names(fy_info$fiscal_years)) {
+        fy_data <- fy_info$fiscal_years[[fy_name]]
+        fy <- fy_data$fy
+        
+        # Calculate the proportion of FY24 that this FY segment maps to
+        fy24_ranges <- map_date_range_to_fy24(fy_data$start, fy_data$end, NULL)
+        
+        # Calculate days covered in FY24
+        total_days <- 0
+        for (rng in fy24_ranges) {
+          total_days <- total_days + as.integer(rng[2] - rng[1]) + 1
+        }
+        
+        # FY24 is approximately 362 days (Oct 1 2023 to Sep 27 2024)
+        fy24_total_days <- 362
+        proportion <- min(1, total_days / fy24_total_days)
+        
+        # Estimate FY-specific impact (proportional to days affected)
+        fy_mu <- mu * proportion
+        fy_ci <- ci * proportion
+        
+        fy_summaries[[fy_name]] <- list(
+          fy = fy,
+          start = fy_data$start,
+          end = fy_data$end,
+          days_affected = total_days,
+          proportion = proportion,
+          mu = fy_mu,
+          ci = fy_ci
+        )
+      }
+    }
+
+    list(
+      total_actuals = total_actuals,
+      overall = df_overall,
+      fy_summaries = fy_summaries,
+      mu = mu,
+      ci = ci
+    )
+  })
+
+  output$summary_boxes <- renderUI({
+    s <- park_summary()
+
+    # Overall summary boxes
+    overall_boxes <- layout_column_wrap(
+      width = 1 / 3,
+      value_box(
+        title = "Overall impact (mean)",
+        value = sprintf("%.2f%%", s$mu),
+        theme = "primary"
+      ),
+      value_box(
+        title = "95% CI (bootstrap)",
+        value = sprintf("%.2f%% to %.2f%%", s$ci[1], s$ci[2]),
+        theme = "primary"
+      ),
+      value_box(
+        title = "Runs",
+        value = as.character(input$n_runs),
+        theme = "secondary"
+      )
+    )
+    
+    # FY breakdown boxes (if multiple FYs affected)
+    fy_boxes <- NULL
+    if (length(s$fy_summaries) > 1) {
+      fy_box_list <- lapply(names(s$fy_summaries), function(fy_name) {
+        fy_sum <- s$fy_summaries[[fy_name]]
+        value_box(
+          title = sprintf("FY%s Impact", substr(fy_name, 3, 4)),
+          value = sprintf("%.2f%%", fy_sum$mu),
+          theme = "info",
+          p(style = "font-size: 0.85em; margin-top: 4px;",
+            sprintf("%.0f%% of year affected", fy_sum$proportion * 100))
+        )
+      })
+      
+      fy_boxes <- tagList(
+        tags$hr(),
+        h5("Impact by Fiscal Year", style = "margin-top: 12px;"),
+        helpText("Estimated impact for each fiscal year covered by the closure dates."),
+        layout_column_wrap(
+          width = 1 / length(s$fy_summaries),
+          !!!fy_box_list
+        )
+      )
+    }
+    
+    tagList(overall_boxes, fy_boxes)
+  })
+
+  output$summary_text <- renderUI({
+    exps <- selected_exps_rv()
+    if (length(exps) == 0) return(NULL)
+
+    labels <- exp_data %>%
+      filter(name %in% exps) %>%
+      distinct(name, Repository.Offering.Name) %>%
+      arrange(Repository.Offering.Name)
+
+    park_labels <- c(
+      "1" = "Magic Kingdom",
+      "2" = "EPCOT",
+      "3" = "Hollywood Studios",
+      "4" = "Animal Kingdom"
+    )
+    park_name <- unname(park_labels[as.character(input$selected_park)])
+    if (is.na(park_name) || is.null(park_name)) park_name <- as.character(input$selected_park)
+    
+    # Get experience date info
+    exp_info <- get_exp_fy_info(input, exps)
+    
+    # Build experience details with dates
+    exp_details <- lapply(exps, function(exp_name) {
+      info <- exp_info[[exp_name]]
+      exp_label <- as.character(labels$Repository.Offering.Name[labels$name == exp_name][1])
+      
+      if (info$is_permanent) {
+        tags$li(
+          strong(exp_label, ": "),
+          sprintf("Closing permanently from %s", format(info$start, "%b %d, %Y")),
+          span(class = "badge text-bg-danger", style = "margin-left: 8px;", "Permanent")
+        )
+      } else {
+        # Calculate which FYs are affected
+        segments <- split_date_range_by_fy(info$start, info$end, NULL)
+        fys_affected <- unique(sapply(segments, function(s) s$fy))
+        fys_affected <- fys_affected[fys_affected >= 2024 & fys_affected <= 2030]
+        fy_str <- if (length(fys_affected) > 0) {
+          paste0("FY", substr(as.character(fys_affected), 3, 4), collapse = ", ")
+        } else {
+          "FY24"
+        }
+        
+        tags$li(
+          strong(exp_label, ": "),
+          sprintf("%s to %s", format(info$start, "%b %d, %Y"), format(info$end, "%b %d, %Y")),
+          span(class = "badge text-bg-info", style = "margin-left: 8px;", fy_str)
+        )
+      }
+    })
+
+    tagList(
+      h5("Simulation Inputs"),
+      tags$ul(
+        tags$li(strong("Park: "), park_name),
+        tags$li(strong("Simulation runs: "), input$n_runs)
+      ),
+      h5("Experiences & Date Ranges", style = "margin-top: 12px;"),
+      tags$ul(exp_details)
+    )
+  })
  
+  # ---- Plot output selectors (plotly optional) ----
+  # NOTE: keep these UI outputs unconditional (no req()), otherwise cards render empty
+  # until after the simulation runs.
+  get_histplot_height <- function() {
+    sim_df <- tryCatch(simulation_results(), error = function(e) NULL)
+    if (is.null(sim_df) || !is.data.frame(sim_df) || nrow(sim_df) == 0) return(900L)
+
+    df_park <- sim_df %>% filter(Park == input$selected_park)
+    total_actuals <- df_park %>%
+      group_by(sim_run) %>%
+      summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+      summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+      pull(1)
+
     df_name_simrun <- df_park %>%
       group_by(NAME, sim_run) %>%
       summarise(
         Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
-        Actuals = sum(Actual_EARS, na.rm = TRUE),
         .groups = "drop"
       ) %>%
       mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
- 
+
     df_mean <- df_name_simrun %>%
       group_by(NAME) %>%
-      summarise(
-        Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
-        Actuals = sum(Actuals, na.rm = TRUE),
-        .groups = "drop"
-      ) %>%
-      arrange(desc(Actuals))
- 
-    df_mean$NAME <- factor(df_mean$NAME, levels = df_mean$NAME)
- 
-    ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct, fill = NAME)) +
-      geom_bar(stat = "identity") +
-      labs(
-        title = NULL,
-        x = "Attraction",
-        y = "Average Incremental EARS (% of Park Actuals)"
-      ) +
-      theme_minimal(base_family = "Century Gothic") +
-      theme(
-        plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
-        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
-        axis.title.x = element_text(family = "Century Gothic"),
-        axis.title.y = element_text(family = "Century Gothic"),
-        axis.text.y = element_text(family = "Century Gothic"),
-        legend.position = "none"
-      ) +
-      scale_y_continuous(labels = scales::percent_format(scale = 1))
+      summarise(Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE), .groups = "drop")
+
+    sim_inputs <- selected_exps_rv()
+    if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+    df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+
+    n <- nrow(df_mean)
+    # ~20-24px per bar works well in Dataiku; cap to avoid huge pages.
+    as.integer(max(650, min(1400, 22 * n + 200)))
+  }
+
+  output$histplot_ui <- renderUI({
+    h <- get_histplot_height()
+    if (has_plotly) plotly::plotlyOutput("histplot", height = h) else plotOutput("histplot", height = h)
   })
+  output$boxplot_park_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_park", height = 460) else plotOutput("boxplot_park", height = 460)
+  })
+  output$boxplot_lifestage_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_lifestage", height = 620) else plotOutput("boxplot_lifestage", height = 620)
+  })
+  output$boxplot_genre_ui <- renderUI({
+    if (has_plotly) plotly::plotlyOutput("boxplot_genre", height = 620) else plotOutput("boxplot_genre", height = 620)
+  })
+
+  # ---- Plots ----
+  # Cannibalization: Plotly bar chart, preserving all bars by widening categorical axis.
+  if (has_plotly) {
+    output$histplot <- plotly::renderPlotly({
+      sim_df <- simulation_results()
+      req(nrow(sim_df) > 0)
+
+      df_park <- sim_df %>% filter(Park == input$selected_park)
+
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+        pull(1)
+
+      df_name_simrun <- df_park %>%
+        group_by(NAME, sim_run) %>%
+        summarise(
+          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+          Actuals = sum(Actual_EARS, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
+
+      df_mean <- df_name_simrun %>%
+        group_by(NAME) %>%
+        summarise(
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
+          Actuals = sum(Actuals, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        arrange(desc(Actuals))
+
+      # Remove experiences used as simulation inputs from cannibalization view
+      sim_inputs <- selected_exps_rv()
+      if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+
+      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
+
+      n_cats <- nrow(df_mean)
+      # Ensure bars remain visible by giving each category enough pixels.
+      width_px <- max(1200, n_cats * 18)
+      height_px <- get_histplot_height()
+
+      plt <- plotly::plot_ly(
+        data = df_mean,
+        x = ~NAME,
+        y = ~Mean_Inc_EARS_Pct,
+        type = "bar",
+        marker = list(color = "#2C7FB8"),
+        hovertemplate = paste(
+          "<b>%{x}</b>",
+          "<br>Avg Incremental EARS: %{y:.2f}%",
+          "<extra></extra>"
+        )
+      )
+
+      plt <- plotly::layout(
+        plt,
+        height = height_px,
+        width = width_px,
+        bargap = 0.05,
+        margin = list(l = 80, r = 20, t = 10, b = 320),
+        xaxis = list(
+          type = "category",
+          automargin = TRUE,
+          tickangle = 90,
+          categoryorder = "array",
+          categoryarray = as.character(levels(df_mean$NAME))
+        ),
+        yaxis = list(
+          automargin = TRUE,
+          ticksuffix = "%",
+          tickformat = ".2f"
+        )
+      )
+
+      plt <- plotly::config(plt, responsive = FALSE)
+
+      # Force the widget element to the wider width so bars aren't sub-pixel thin.
+      htmlwidgets::onRender(
+        plt,
+        sprintf(
+          "function(el,x){el.style.width='%dpx'; if(window.Plotly){Plotly.Plots.resize(el);} }",
+          width_px
+        )
+      )
+    })
+  } else {
+    output$histplot <- renderPlot({
+      sim_df <- simulation_results()
+      req(nrow(sim_df) > 0)
+
+      df_park <- sim_df %>% filter(Park == input$selected_park)
+
+      total_actuals <- df_park %>%
+        group_by(sim_run) %>%
+        summarise(Total_Actuals = sum(Actual_EARS, na.rm = TRUE), .groups = "drop") %>%
+        summarise(mean(Total_Actuals, na.rm = TRUE), .groups = "drop") %>%
+        pull(1)
+
+      df_name_simrun <- df_park %>%
+        group_by(NAME, sim_run) %>%
+        summarise(
+          Sum_Inc_EARS = sum(Incremental_EARS, na.rm = TRUE),
+          Actuals = sum(Actual_EARS, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(Sum_Inc_EARS_Pct = 100 * Sum_Inc_EARS / total_actuals)
+
+      df_mean <- df_name_simrun %>%
+        group_by(NAME) %>%
+        summarise(
+          Mean_Inc_EARS_Pct = mean(Sum_Inc_EARS_Pct, na.rm = TRUE),
+          Actuals = sum(Actuals, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        arrange(desc(Actuals))
+
+      sim_inputs <- selected_exps_rv()
+      if (length(sim_inputs) > 0) df_mean <- df_mean %>% filter(!NAME %in% sim_inputs)
+
+      df_mean <- df_mean %>% filter(is.finite(Mean_Inc_EARS_Pct))
+      df_mean$NAME <- factor(df_mean$NAME, levels = unique(df_mean$NAME))
+
+      ggplot(df_mean, aes(x = NAME, y = Mean_Inc_EARS_Pct)) +
+        geom_col(fill = "#2C7FB8") +
+        geom_hline(yintercept = 0, linewidth = 0.4, color = "#6c757d") +
+        labs(
+          title = NULL,
+          x = "Attraction",
+          y = "Average Incremental EARS (% of Park Actuals)"
+        ) +
+        theme_minimal(base_family = "Century Gothic") +
+        theme(
+          plot.title = element_text(hjust = 0.5, family = "Century Gothic"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, family = "Century Gothic"),
+          axis.title.x = element_text(family = "Century Gothic"),
+          axis.title.y = element_text(family = "Century Gothic"),
+          legend.position = "none"
+        ) +
+        scale_y_continuous(labels = scales::percent_format(scale = 1))
+    })
+  }
  
-  output$boxplot_park <- renderPlot({
+  output$boxplot_park <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1114,7 +1801,7 @@ print(list(
     ci <- stats::quantile(boot_means, probs = c(0.025, 0.975), na.rm = TRUE, names = FALSE)
     mu <- mean(x, na.rm = TRUE)
 
-    ggplot(df_box, aes(x = Inc_EARS_Pct)) +
+    p <- ggplot(df_box, aes(x = Inc_EARS_Pct)) +
       geom_histogram(bins = min(30L, max(10L, length(x))), fill = "#5DADE2", color = "white", alpha = 0.9) +
       geom_vline(xintercept = mu, linewidth = 0.9, color = "#1B4F72") +
       geom_vline(xintercept = ci[1], linetype = "dashed", linewidth = 0.9, color = "#1B4F72") +
@@ -1137,9 +1824,11 @@ print(list(
         axis.text.y = element_text(family = "Century Gothic")
       ) +
       scale_x_continuous(labels = scales::percent_format(scale = 1))
+
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 460, margin = list(l = 60, r = 20, t = 20, b = 60)) else p
   })
  
-  output$boxplot_lifestage <- renderPlot({
+  output$boxplot_lifestage <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
  
@@ -1181,7 +1870,7 @@ print(list(
  
     df_life$LifeStage <- factor(df_life$LifeStage, levels = sort(unique(df_life$LifeStage)))
  
-    ggplot(df_life, aes(x = LifeStage, y = Inc_EARS_Pct, fill = LifeStage)) +
+    p <- ggplot(df_life, aes(x = LifeStage, y = Inc_EARS_Pct, fill = LifeStage)) +
       geom_boxplot() +
       labs(
         title = NULL,
@@ -1197,11 +1886,14 @@ print(list(
         axis.title.y = element_text(family = "Century Gothic"),
         axis.text.y = element_text(family = "Century Gothic")
       ) +
+      scale_fill_brewer(palette = "Dark2") +
       scale_x_discrete(labels = lifestage_labels) +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
+
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 620, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
-  output$boxplot_genre <- renderPlot({
+  output$boxplot_genre <- (if (has_plotly) plotly::renderPlotly else renderPlot)({
     sim_df <- simulation_results()
     req(nrow(sim_df) > 0)
     req("Genre" %in% names(sim_df))
@@ -1236,7 +1928,7 @@ print(list(
  
     df_genre$Genre <- factor(df_genre$Genre, levels = sort(unique(df_genre$Genre)))
  
-    ggplot(df_genre, aes(x = Genre, y = Inc_EARS_Pct, fill = Genre)) +
+    p <- ggplot(df_genre, aes(x = Genre, y = Inc_EARS_Pct, fill = Genre)) +
       geom_boxplot() +
       labs(
         title = NULL,
@@ -1251,9 +1943,14 @@ print(list(
         axis.title.y = element_text(family = "Century Gothic"),
         axis.text.y = element_text(family = "Century Gothic")
       ) +
+      scale_fill_brewer(palette = "Dark2") +
       scale_y_continuous(labels = scales::percent_format(scale = 1), limits = y_range)
+
+    if (has_plotly) plotly::layout(plotly::ggplotly(p, tooltip = c("x", "y")), height = 620, margin = list(l = 80, r = 20, t = 20, b = 80)) else p
   })
  
+  # (Details tab removed per request)
+
   # ---- Download ----
   output$download_sim <- downloadHandler(
     filename = function() {
@@ -1263,9 +1960,14 @@ print(list(
       write.csv(simulation_results(), file, row.names = FALSE)
     }
   )
+
+  # (Summary download removed per request)
 }
  
 # UI is not included in your snippet; keep your existing ui <- ... definition
 # and ensure it has: input$selected_park, input$n_runs, input$simulate, and output placeholders.
  
 # shinyApp(ui = ui, server = server)
+
+# In some runtimes (e.g. Dataiku/Shiny wrappers), `server.R` must *return* the server function.
+server
