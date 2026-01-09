@@ -9,8 +9,18 @@ SurveyDataCheck_new <- dkuReadDataset("FY24_prepared")
 POG_new <- dkuReadDataset("Charcter_Entertainment_POG")
 SurveyData_new <- dkuReadDataset("FY24_prepared")
 
-n_runs <- 10
-num_cores <- 5
+# Allow caller (e.g. Shiny) to override parameters before sourcing this file
+if (!exists("n_runs", inherits = FALSE)) n_runs <- 10
+if (!exists("num_cores", inherits = FALSE)) num_cores <- 5
+if (!exists("yearauto", inherits = FALSE)) yearauto <- 2024
+if (!exists("park_for_sim", inherits = FALSE)) park_for_sim <- 1
+if (!exists("exp_name", inherits = FALSE)) exp_name <- c("tron")
+if (!exists("exp_date_ranges", inherits = FALSE)) {
+  exp_date_ranges <- list(tron = c("2023-10-11", "2025-09-02"))
+}
+if (!exists("maxFQ", inherits = FALSE)) maxFQ <- 4
+if (!exists("verbose", inherits = FALSE)) verbose <- FALSE
+
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
@@ -25,10 +35,14 @@ minFQ<-min(SurveyData$fiscal_quarter)
 SurveyCheckFinal<-c()
 CountCheckFinal<-c()
 
-maxFQ<-4
+maxFQ<-maxFQ
 
 # Parallel loop
-EARSTotal_list <- foreach(run = 1:n_runs, .combine = rbind,.packages = c("dataiku","nnet","sqldf","data.table")) %dopar% {
+EARSTotal_list <- foreach(
+  run = 1:n_runs,
+  .combine = rbind,
+  .packages = c("dataiku", "nnet", "sqldf", "data.table", "dplyr", "reshape2", "reshape")
+) %dopar% {
  EARSFinal_Final<-c()
     EARSx<-c()
     EARSTotal<-c()
@@ -36,22 +50,17 @@ EARSTotal_list <- foreach(run = 1:n_runs, .combine = rbind,.packages = c("dataik
 
 SurveyData <- SurveyData_new
 names(SurveyData) <- tolower(names(SurveyData))
-SurveyData$newgroup<-SurveyData$newgroup1
-    SurveyData$newgroup[SurveyData$newgroup == 4]<-3
-SurveyData$newgroup[SurveyData$newgroup == 5]<-4
-SurveyData$newgroup[SurveyData$newgroup == 6]<-5
-SurveyData$newgroup[SurveyData$newgroup == 7]<-5
+ # Explicit LifeStage mapping (keeps all other values unchanged)
+ SurveyData$newgroup <- SurveyData$newgroup1
+ map_from <- c(4, 5, 6, 7)
+ map_to <- c(3, 4, 5, 5)
+ m <- match(SurveyData$newgroup, map_from)
+ SurveyData$newgroup[!is.na(m)] <- map_to[m[!is.na(m)]]
 SurveyData_new <- SurveyData
 
   # --- Monte Carlo simulation: create SurveyData_copy ---
   meta_prepared <- meta_prepared_new
-park <- 1
-exp_name <- c("tron")
-
-# Define date ranges for each experience
-exp_date_ranges <- list(
-  tron = c("2023-10-11", "2025-09-02")
-)
+park <- as.integer(park_for_sim)
 
 for (name in exp_name) {
   matched_row <- meta_prepared[meta_prepared$name == name & meta_prepared$Park == park, ]
@@ -94,14 +103,12 @@ for (name in exp_name) {
     }
                                                SurveyDataSim<-SurveyData
                      #meta_prepared_new <- meta_prepared_new[!meta_prepared_new$Variable %in% removed_rides, ]
+# Quarter range (DT read removed; values were hardcoded anyway)
+FQ <- 1
+maxFQ <- 4
 
-DT <- dkuReadDataset("DT")
-
-#FQ<-DT$FSCL_QTR_NB[as.Date(DT$CLNDR_DT)==as.Date(min(unlist(exp_date_ranges)))]
-FQ<-1
-
-#maxFQ<-DT$FSCL_QTR_NB[as.Date(DT$CLNDR_DT)==as.Date(max(unlist(exp_date_ranges)))]
-maxFQ<-4
+# Load once per simulation run (was loaded each quarter)
+EARS <- dkuReadDataset("EARS_Taxonomy")
 while(FQ<maxFQ+1){
 SurveyData <- SurveyDataSim
 #Setting the FY but this could be changed to be read in automatically from the data
@@ -127,26 +134,20 @@ QTRLY_GC <- QTRLY_GC_new
 SurveyData<-SurveyData[SurveyData$fiscal_quarter==FQ,]
 
     #This code is for setting up the Pecent of Gate (POG) calculation for things with no Guest Carried
-k<-1
-name<-NULL
-park<-NULL
-expd<-NULL
-while(k <length(meta_prepared$Variable)+1){
-eddie<-sub(".*_","",unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split=c( 'charexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'ridesexp_'), fixed=TRUE))[1])
-pahk<-gsub("_.*","",unlist(strsplit(unlist(strsplit(unlist(strsplit(meta_prepared$Variable[k], split=c( 'charexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'ridesexp_'), fixed=TRUE))[1])
-if(pahk == "dak"){pahk<-4}
-    if(pahk == "mk"){pahk<-1}
-    if(pahk == "ec"){pahk<-2}
-    if(pahk == "dhs"){pahk<-3}
+vars <- meta_prepared$Variable
+base_var <- sub(".*(charexp_|entexp_|ridesexp_)", "", vars)
+name <- sub(".*_", "", base_var)
+pahk_str <- sub("_.*", "", base_var)
+park_map <- c(mk = 1, ec = 2, dhs = 3, dak = 4)
+park <- unname(park_map[pahk_str])
 
+# NOTE: preserve existing behavior (numerator is not park-filtered)
+num <- colSums(SurveyData[, vars, drop = FALSE] > 0, na.rm = TRUE)
+denom_by_park <- table(SurveyData$park)
+den <- as.numeric(denom_by_park[as.character(park)])
+expd <- num / den
 
-    expd1<-sum(SurveyData[,meta_prepared$Variable[k]] >0 , na.rm=TRUE)/nrow(SurveyData[SurveyData$park == pahk,])
-    name<-append(name,eddie)
-    park<-append(park,pahk)
-    expd<-append(expd,expd1)
-   k<-k+1
-    }
-meta_preparedPOG<-data.frame(name,Park=park,POG=meta_prepared$POG,expd)
+meta_preparedPOG <- data.frame(name, Park = park, POG = meta_prepared$POG, expd)
 meta_preparedPOG
 
 AttQTR<-AttQTR[AttQTR$FQ ==FQ,]
@@ -164,8 +165,6 @@ metaPOG<-merge(meta_prepared,meta_preparedPOG[,c("Park","name","NEWGC")],by=c('n
 library('sqldf')
 meta_prepared2<-sqldf("select a.*,b.GC as QuarterlyGuestCarried from meta_prepared a left join
 QTRLY_GC b on a.name=b.name and a.Park = b.Park")
-#metaPOG$QuarterlyGuestCarried<-metaPOG$NEWGC
-library(data.table)
 setDT(meta_prepared2)
 setDT(metaPOG)
 meta_prepared2[metaPOG, on=c("name","Park"), QuarterlyGuestCarried:=i.NEWGC]
@@ -354,7 +353,7 @@ weights22<-rbind(weightedEEs,weightsPref1,weightsPref2,weightsPref3,weightsPref4
 CantRideWeight22<-cantride2[,-1]
     CantRideWeight22
   #  CantRideWeight22[!is.na(CantRideWeight22),]<-0
-print(weights22)
+if (verbose) print(weights22)
     #The weights above (weightedEEs) are now multiplied to the experience data so we can convert the data into overall excellent experiences
     #The Cant Ride weights are a separate weight for Guests that wanted to ride but couldnt.  Think of these weights as runs against our team
 
@@ -389,14 +388,9 @@ metadata[,3]<-tolower(metadata[,3])
 metadata[,18]<-tolower(metadata[,18])
 metadata[,19]<-tolower(metadata[,19])
 
-rideagain<-c()
-rideexp<-c()
-rideexp_fix<-c()
-for(i in 1:length(metadata[,2])){
-rideagain<-c(rideagain,metadata[,3][i])
-    rideexp<-c(rideexp,metadata[which(!is.na(metadata[,3])),2][i])
-rideexp_fix<-c(rideexp_fix,metadata[which(!is.na(metadata[,2])),2][i])
-    }
+rideagain <- metadata[,3]
+rideexp <- metadata[!is.na(metadata[,3]),2]
+rideexp_fix <- metadata[!is.na(metadata[,2]),2]
 
 rideagain <- rideagain[!is.na(rideagain)]
 rideexp <- rideexp[!is.na(rideexp)]
@@ -407,43 +401,31 @@ for(i in 1:length(rideagain)){
 SurveyData22[which(SurveyData22[,rideexp[i]] !=0 & SurveyData22[,rideagain[i]] ==0),rideagain[i]]<-1
     }
 
-ridesexp<-c()
-for(i in 1:length(metadata[,2])){
-ridesexp<-c(ridesexp,unlist(strsplit(metadata[i,2], split='ridesexp_', fixed=TRUE))[2])
-    }
-ridesexp <- ridesexp[!is.na(ridesexp)]
-
-ridesexp<-sub(".*_", "", ridesexp)
+ridesexp_full <- metadata[,2]
+ridesexp_full <- ridesexp_full[!is.na(ridesexp_full) & grepl("ridesexp_", ridesexp_full, fixed = TRUE)]
+ridesexp <- sub("^.*ridesexp_", "", ridesexp_full)
+ridesexp <- sub(".*_", "", ridesexp)
 
 
 
-entexp<-c()
-for(i in 1:length(metadata[,2])){
-entexp<-c(entexp,unlist(strsplit(metadata[i,2], split='entexp_', fixed=TRUE))[2])
-    }
-entexp <- entexp[!is.na(entexp)]
-entexp <-sub(".*_", "", entexp )
+entexp_full <- metadata[,2]
+entexp_full <- entexp_full[!is.na(entexp_full) & grepl("entexp_", entexp_full, fixed = TRUE)]
+entexp <- sub("^.*entexp_", "", entexp_full)
+entexp <- sub(".*_", "", entexp)
 
-charexp<-c()
-for(i in 1:length(metadata[,2])){
-charexp<-c(charexp,unlist(strsplit(metadata[i,2], split='charexp_', fixed=TRUE))[2])
-    howexp<-paste("charhow",charexp,sep="_")
-    }
-charexp <- charexp[!is.na(charexp)]
-charexp <-sub(".*_", "", charexp)
-howexp<-howexp[howexp!="charhow_NA"]
+charexp_full <- metadata[,2]
+charexp_full <- charexp_full[!is.na(charexp_full) & grepl("charexp_", charexp_full, fixed = TRUE)]
+charexp_after_prefix <- sub("^.*charexp_", "", charexp_full)
+howexp <- paste("charhow", charexp_after_prefix, sep = "_")
+howexp <- howexp[howexp != "charhow_NA"]
+charexp <- sub(".*_", "", charexp_after_prefix)
 
 for(i in 1:length(charexp)){
 SurveyData22[,as.character(colnames(SurveyData22)[grepl('charexp_', colnames(SurveyData22))])[i]]<-SurveyData22[,as.character(colnames(SurveyData22)[grepl('charexp_', colnames(SurveyData22))])[i]]*as.numeric(SurveyData22[,colnames(SurveyData22) == howexp[i]]<2|SurveyData22[,colnames(SurveyData22) == howexp[i]]==3|SurveyData22[,colnames(SurveyData22) == howexp[i]]==4)
     }
 
-rideagainx<-c()
-RIDEX<-c()
-for(i in 1:length(metadata[,2])){
-rideagainx<-c(rideagainx,metadata[,18][i])
-    RIDEX<-c(RIDEX,metadata[which(!is.na(metadata[,18])),2][i])
-
-    }
+rideagainx <- metadata[,18]
+RIDEX <- metadata[!is.na(metadata[,18]),2]
 rideagainx <- tolower(rideagainx[!is.na(rideagainx)])
 RIDEX <- tolower(RIDEX[!is.na(RIDEX)])
 
@@ -454,44 +436,29 @@ SurveyData22[which(SurveyData22[,RIDEX[i]] ==0 & SurveyData22[,rideagainx[i]] ==
 
     }
 
-for(i in 1:length(ridesexp)){
-SurveyData22[,paste(ridesexp,"2", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    SurveyData22[,paste(ridesexp,"3", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    }
-
-
-for(i in 1:length(entexp)){
-SurveyData22[,paste(entexp,"2", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    SurveyData22[,paste(entexp,"3", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    }
-
-for(i in 1:length(charexp)){
-SurveyData22[,paste(charexp,"2", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    SurveyData22[,paste(charexp,"3", sep = "")[i]] <-rep(0,length(SurveyData22[,1]))
-    }
+new_cols <- unique(c(
+  paste0(ridesexp, "2"), paste0(ridesexp, "3"),
+  paste0(entexp, "2"), paste0(entexp, "3"),
+  paste0(charexp, "2"), paste0(charexp, "3")
+))
+SurveyData22[, new_cols] <- 0
 
 idx_non_na <- which(!is.na(metadata[,2]))
  rideagain_fix<-metadata[,3]
 i <- 5
 for (j in 1:5) {
   for (park in 1:4) {
+    idx_pj <- which(SurveyData22$park == park & SurveyData22$ovpropex == j)
     # Ride assignments
     idx_ride <- which(metadata$Type[idx_non_na] == "Ride" & metadata$Park[idx_non_na] == park)
     for (k in idx_ride) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ride): offset = 0
 
-          value2 <- weights22[i + (park - 1) * 15+10, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-            
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+10, j + 2]
         }
       }
     }
@@ -500,18 +467,11 @@ for (j in 1:5) {
     for (k in idx_ent) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ent): offset = 0
 
-          value2 <- weights22[i + (park - 1) * 15, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15, j + 2]
         }
       }
     }
@@ -521,18 +481,11 @@ for (j in 1:5) {
     for (k in idx_flash) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Flaship/Anchor): offset = 40
 
-          value2 <- weights22[i + (park - 1) * 5+60 , j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 5+60 , j + 2]
         }
       }
     }
@@ -541,58 +494,47 @@ for (j in 1:5) {
     for (k in idx_show) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Show): offset = 15
 
-          value2 <- weights22[i + (park - 1) * 15+5, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+5, j + 2]
         }
       }
     }
   }
-  print(c(i, j))
+  if (verbose) print(c(i, j))
 }
 
 for (i in 1:4){
 for (j in 1:5) {
   for (park in 1:4) {
+    idx_pj <- which(SurveyData22$park == park & SurveyData22$ovpropex == j)
+    idx_p5 <- which(SurveyData22$park == park & SurveyData22$ovpropex == 5)
     # --- Rides ---
     idx_ride <- which(metadata$Type == "Ride" & metadata$Park == park)
     for (k in idx_ride) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ride): offset = 0
-        value2 <- weights22[i + (park - 1) * 15+10, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+10, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
         if (length(rows_5) > 0) {
           SurveyData22[rows_5, colname2] <- CantRideWeight22[park, 5 + 2] * (1 * SurveyData22[rows_5, rideexp_fix[k]])
-            if(colname2=="safaris3"&FQ==4){
-            print(c(colname2, rideagain_fix[k],value2))
-            print(weights22[i + (park - 1) * 15+10, j + 2])
-            print(cond1[rows])
-print(cond2[rows])
-print(cond3[rows])
-print(cond4[rows])}
+            if (verbose && colname2 == "safaris3" && FQ == 4) {
+              print(c(colname2, rideagain_fix[k]))
+              print(weights22[i + (park - 1) * 15+10, j + 2])
+              print(SurveyData22[rows, rideexp_fix[k]])
+              print(length(rows))
+            }
         }
       }
     }
@@ -602,19 +544,14 @@ print(cond4[rows])}
     for (k in idx_flash) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-       cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Flaship/Anchor): offset = 40
-        value2 <- weights22[i + (park - 1) *  5+60 , j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) *  5+60 , j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -629,19 +566,14 @@ print(cond4[rows])}
     for (k in idx_show) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-       cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Show): offset = 15
-        value2 <- weights22[i + (park - 1) * 15+5, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15+5, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -656,19 +588,14 @@ print(cond4[rows])}
     for (k in idx_play) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-        cond1 <- SurveyData22[, rideexp_fix[k]] == i
-        cond2 <- SurveyData22$ovpropex == j
-        cond3 <- SurveyData22$park == park
-       cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Play): offset = 0
-        value2 <- weights22[i + (park - 1) * 15, j + 2] * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          SurveyData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          SurveyData22[rows, colname2] <- weights22[i + (park - 1) * 15, j + 2]
         }
         # "Can't ride" assignment
-        rows_j <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == j & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
-        rows_5 <- which(SurveyData22[, rideexp_fix[k]] == -1 & SurveyData22$ovpropex == 5 & SurveyData22$park == park& SurveyData22$fiscal_quarter == FQ)
+        rows_j <- idx_pj[which(SurveyData22[idx_pj, rideexp_fix[k]] == -1)]
+        rows_5 <- idx_p5[which(SurveyData22[idx_p5, rideexp_fix[k]] == -1)]
         if (length(rows_j) > 0) {
           SurveyData22[rows_j, colname2] <- CantRideWeight22[park, j + 2] * (-1 * SurveyData22[rows_j, rideexp_fix[k]])
         }
@@ -678,9 +605,106 @@ print(cond4[rows])}
       }
     }
   }
-  print(c(i, j))
+  if (verbose) print(c(i, j))
 }
     }
+    
+    # ---- Block 7: fast aggregation of runs/against (weighted) ----
+    library(data.table)
+    
+    # Build mapping from metadata variable to short "base" (e.g., safaris -> safaris2/safaris3)
+    meta_var <- as.character(metadata[,2])
+    meta_map <- data.table(
+      Park = metadata$Park,
+      Type = metadata$Type,
+      Category1 = metadata$Category1,
+      base = sub(".*_", "", sub(".*(ridesexp_|entexp_|charexp_)", "", meta_var))
+    )
+    meta_map <- meta_map[!is.na(Park) & !is.na(Type) & !is.na(base) & base != ""]
+    
+    ride_bases <- unique(meta_map[Type == "Ride", base])
+    show_map <- unique(meta_map[Type == "Show" & !is.na(Category1), .(Park, base, Category1)])
+    play_map <- unique(meta_map[Type == "Play" & !is.na(Category1), .(Park, base, Category1)])
+    show_names <- unique(show_map$Category1)
+    play_names <- unique(play_map$Category1)
+    
+    agg_by_base <- function(dt, bases, suffix, skeleton, all_bases) {
+      cols <- paste0(bases, suffix)
+      cols <- cols[cols %in% names(dt)]
+      
+      out <- copy(as.data.table(skeleton))
+      if (length(cols) > 0) {
+        bases2 <- sub(paste0(suffix, "$"), "", cols)
+        tmp <- dt[, c("park", "newgroup", "fiscal_quarter", cols), with = FALSE]
+        setnames(tmp, cols, bases2)
+        tmp_out <- tmp[, lapply(.SD, sum, na.rm = TRUE),
+                       by = .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter),
+                       .SDcols = bases2]
+        out <- merge(out, tmp_out, by = c("Park", "LifeStage", "QTR"), all.x = TRUE)
+      }
+      
+      for (nm in all_bases) {
+        if (!nm %in% names(out)) out[, (nm) := 0]
+        out[is.na(get(nm)), (nm) := 0]
+      }
+      setcolorder(out, c("Park", "LifeStage", "QTR", all_bases))
+      as.data.frame(out)
+    }
+    
+    agg_by_category <- function(dt, map_dt, suffix, skeleton, all_names) {
+      out <- copy(as.data.table(skeleton))
+      for (nm in all_names) out[, (nm) := 0]
+      if (nrow(map_dt) == 0) {
+        setcolorder(out, c("Park", "LifeStage", "QTR", all_names))
+        return(as.data.frame(out))
+      }
+      
+      cols <- unique(paste0(map_dt$base, suffix))
+      cols <- cols[cols %in% names(dt)]
+      if (length(cols) == 0) {
+        setcolorder(out, c("Park", "LifeStage", "QTR", all_names))
+        return(as.data.frame(out))
+      }
+      
+      dt_sub <- dt[, c("park", "newgroup", "fiscal_quarter", cols), with = FALSE]
+      long <- data.table::melt(
+        dt_sub,
+        id.vars = c("park", "newgroup", "fiscal_quarter"),
+        measure.vars = cols,
+        variable.name = "col",
+        value.name = "value",
+        variable.factor = FALSE
+      )
+      long[, base := sub(paste0(suffix, "$"), "", col)]
+      
+      map2 <- unique(as.data.table(map_dt)[, .(park = Park, base, NAME = Category1)])
+      long <- merge(long, map2, by = c("park", "base"), all = FALSE)
+      
+      grp <- long[, .(value = sum(value, na.rm = TRUE)),
+                  by = .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter, NAME)]
+      wide <- data.table::dcast(grp, Park + LifeStage + QTR ~ NAME, value.var = "value", fill = 0)
+      wide <- merge(out[, .(Park, LifeStage, QTR)], wide, by = c("Park", "LifeStage", "QTR"), all.x = TRUE)
+      
+      for (nm in all_names) {
+        if (!nm %in% names(wide)) wide[, (nm) := 0]
+        wide[is.na(get(nm)), (nm) := 0]
+      }
+      setcolorder(wide, c("Park", "LifeStage", "QTR", all_names))
+      as.data.frame(wide)
+    }
+    
+    dtw <- as.data.table(SurveyData22)
+    skeleton_w <- unique(dtw[, .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter)])
+    
+    Ride_Runs20 <- agg_by_base(dtw, ride_bases, "2", skeleton_w, ride_bases)
+    Ride_Against20 <- agg_by_base(dtw, ride_bases, "3", skeleton_w, ride_bases)
+    Show_Runs20 <- agg_by_category(dtw, show_map, "2", skeleton_w, show_names)
+    Show_Against20 <- agg_by_category(dtw, show_map, "3", skeleton_w, show_names)
+    Play_Runs20 <- agg_by_category(dtw, play_map, "2", skeleton_w, play_names)
+    Play_Against20 <- agg_by_category(dtw, play_map, "3", skeleton_w, play_names)
+    # ---- end block 7 (weighted) ----
+    
+    if (FALSE) {
     jorja<-c()
 for(ii in 1:length(metadata[,2])){
 jorja<-c(jorja,sub(".*_","",unlist(strsplit(unlist(strsplit(unlist(strsplit(metadata[ii,2], split=c( 'ridesexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'charexp_'), fixed=TRUE))[1]))
@@ -695,23 +719,6 @@ for(i in 1: length(jorja)){
 }
 Ride_Runs20<-setNames(aggregate(SurveyData22[,noquote(jorja)], by=list(Park=SurveyData22$park,LifeStage = SurveyData22$newgroup, QTR=SurveyData22$fiscal_quarter), FUN=sum), c("Park","LifeStage", "QTR",noquote(jorja)))
 colnames(Ride_Runs20)
-
-jorja<-c()
-for(ii in 1:length(metadata[,2])){
-jorja<-c(jorja,sub(".*_","",unlist(strsplit(unlist(strsplit(unlist(strsplit(metadata[ii,2], split=c( 'ridesexp_'), fixed=TRUE)), split=c( 'entexp_'), fixed=TRUE)), split=c( 'charexp_'), fixed=TRUE))[1]))
-
-   }
-jorja <- jorja[metadata$Type== "Ride"]
-jorja
-
-Ride_Against20<-c()
-for(i in 1: length(jorja)){
-
-    SurveyData22[,noquote(jorja[i])]<- SurveyData22[,paste(jorja[i],"3",sep="")]
-
-}
-
-Ride_Against20<-setNames(aggregate(SurveyData22[,noquote(jorja)], by=list(Park=SurveyData22$park,LifeStage = SurveyData22$newgroup, QTR=SurveyData22$fiscal_quarter), FUN=sum), c("Park","LifeStage", "QTR",noquote(jorja)))
 
 jorja<-c()
 for(ii in 1:length(metadata[,2])){
@@ -762,8 +769,6 @@ Show_Runsx[Show_Runsx$Park!=1,-c(1:3)]<-0
 Show_Runs20<-data.frame(Show_Runs20,Show_Runsx1)
 
 }
-
-Show_Runs20
 
 jorja<-c()
 for(ii in 1:length(metadata[,2])){
@@ -845,7 +850,6 @@ Show_Againstx[Show_Againstx$Park!=1,-c(1:3)]<-0
 Show_Against20<-data.frame(Show_Against20,Show_Againstx1)
 
 }
-Show_Against20
 
 Play_Againstx<-c()
 Play_Against20<-Ride_Runs20[,1:3]
@@ -876,7 +880,6 @@ Play_Againstx[Play_Againstx$Park!=1,-c(1:3)]<-0
 Play_Against20<-data.frame(Play_Against20,Play_Againstx1)
 
 }
-Play_Against20
 
 Show_Runsx<-c()
 length(unique(metadata$Category1[metadata$Type == "Show" & metadata$Park ==2 ]))
@@ -908,7 +911,6 @@ Show_Runsx[Show_Runsx$Park!=2,-c(1:3)]<-0
 Show_Runs20<-data.frame(Show_Runs20,Show_Runsx1)
 
 }
-Show_Runs20
 
 Play_Runsx<-c()
 Play_Runs20<-Ride_Runs20[,1:3]
@@ -941,7 +943,6 @@ Play_Runsx[Play_Runsx$Park!=1,-c(1:3)]<-0
     Play_Runs20<-data.frame(Play_Runs20,Play_Runsx1)
 
 }
-Play_Runs20
 
 Show_Againstx<-c()
 
@@ -972,7 +973,6 @@ Show_Againstx[Show_Againstx$Park!=2,-c(1:3)]<-0
 Show_Against20<-data.frame(Show_Against20,Show_Againstx1)
 
 }
-Show_Against20
 
 Play_Runsx<-c()
 
@@ -1066,7 +1066,6 @@ Show_Runsx[Show_Runsx$Park!=3,-c(1:3)]<-0
 Show_Runs20<-data.frame(Show_Runs20,Show_Runsx1)
 
 }
-Show_Runs20
 
 Show_Againstx<-c()
 
@@ -1222,8 +1221,6 @@ Show_Againstx[Show_Againstx$Park!=4,-c(1:3)]<-0
 Show_Against20<-data.frame(Show_Against20,Show_Againstx1)
 
 }
-Show_Runs20
-Show_Against20
 
 Play_Runsx<-c()
 
@@ -1285,7 +1282,8 @@ Play_Againstx[Play_Againstx$Park!=4,-c(1:3)]<-0
 Play_Against20<-data.frame(Play_Against20,Play_Againstx1)
 
 }
-Play_Against20
+
+}
 
 
 ############################################################################################
@@ -1297,39 +1295,7 @@ Play_Against20
 
 CountData22<-SurveyData22
 
-ridesexp<-c()
-for(i in 1:length(metadata[,2])){
-ridesexp<-c(ridesexp,unlist(strsplit(metadata[i,2], split='ridesexp_', fixed=TRUE))[2])
-    }
-ridesexp <- ridesexp[!is.na(ridesexp)]
-
-ridesexp<-sub(".*_", "", ridesexp)
-
-
-
-entexp<-c()
-for(i in 1:length(metadata[,2])){
-entexp<-c(entexp,unlist(strsplit(metadata[i,2], split='entexp_', fixed=TRUE))[2])
-    }
-entexp <- entexp[!is.na(entexp)]
-entexp <-sub(".*_", "", entexp )
-
-charexp<-c()
-for(i in 1:length(metadata[,2])){
-charexp<-c(charexp,unlist(strsplit(metadata[i,2], split='charexp_', fixed=TRUE))[2])
-    }
-charexp <- charexp[!is.na(charexp)]
-charexp <-sub(".*_", "", charexp)
-
-rideagainx<-c()
-RIDEX<-c()
-for(i in 1:length(metadata[,2])){
-rideagainx<-c(rideagainx,metadata[,18][i])
-    RIDEX<-c(RIDEX,metadata[which(!is.na(metadata[,18])),2][i])
-
-    }
-rideagainx <- tolower(rideagainx[!is.na(rideagainx)])
-RIDEX <- tolower(RIDEX[!is.na(RIDEX)])
+## Reuse ridesexp/entexp/charexp/rideagainx/RIDEX computed above
 
 
 
@@ -1338,21 +1304,7 @@ CountData22[which(CountData22[,RIDEX[i]] ==0 & CountData22[,rideagainx[i]] ==1 &
 
     }
 
-for(i in 1:length(ridesexp)){
-CountData22[,paste(ridesexp,"2", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    CountData22[,paste(ridesexp,"3", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    }
-
-
-for(i in 1:length(entexp)){
-CountData22[,paste(entexp,"2", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    CountData22[,paste(entexp,"3", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    }
-
-for(i in 1:length(charexp)){
-CountData22[,paste(charexp,"2", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    CountData22[,paste(charexp,"3", sep = "")[i]] <-rep(0,length(CountData22[,1]))
-    }
+CountData22[, new_cols] <- 0
 
 
 idx_non_na <- which(!is.na(metadata[,2]))
@@ -1360,22 +1312,17 @@ idx_non_na <- which(!is.na(metadata[,2]))
 i <- 5
 for (j in 1:5) {
   for (park in 1:4) {
+    idx_pj <- which(CountData22$park == park & CountData22$ovpropex == j)
     # Ride assignments
     idx_ride <- which(metadata$Type[idx_non_na] == "Ride" & metadata$Park[idx_non_na] == park)
     for (k in idx_ride) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- CountData22[, rideexp_fix[k]] == i
-        cond2 <- CountData22$ovpropex == j
-        cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ride): offset = 0
 
-          value2 <- 1* as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
@@ -1384,18 +1331,11 @@ for (j in 1:5) {
     for (k in idx_ent) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- CountData22[, rideexp_fix[k]] == i
-        cond2 <- CountData22$ovpropex == j
-        cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Ent): offset = 0
 
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
@@ -1405,18 +1345,11 @@ for (j in 1:5) {
     for (k in idx_flash) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- CountData22[, rideexp_fix[k]] == i
-        cond2 <- CountData22$ovpropex == j
-        cond3 <- CountData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Flaship/Anchor): offset = 40
 
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
@@ -1425,48 +1358,38 @@ for (j in 1:5) {
     for (k in idx_show) {
       if (!is.na(rideexp_fix[k])) {
         colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "2")
-        cond1 <- CountData22[, rideexp_fix[k]] == i
-        cond2 <- CountData22$ovpropex == j
-        cond3 <- CountData22$park == park
-        cond4 <- SurveyData22$fiscal_quarter == FQ
-        rows <- which(cond1 & cond2 & cond3 &cond4)
+        rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
         # Suffix "2" (Show): offset = 15
 
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 &cond4)[rows]
-
-        if (length(rows) > 0 && length(value2) == length(rows)) {
-          CountData22[rows, colname2] <- value2
-
+        if (length(rows) > 0) {
+          CountData22[rows, colname2] <- 1
         }
       }
     }
   }
-  print(c(i, j))
+  if (verbose) print(c(i, j))
 }
 
 for (i in 1:4) {
   for (j in 1:5) {
     for (park in 1:4) {
+      idx_pj <- which(CountData22$park == park & CountData22$ovpropex == j)
+      idx_p5 <- which(CountData22$park == park & CountData22$ovpropex == 5)
       # --- Rides ---
       idx_ride <- which(metadata$Type == "Ride" & metadata$Park == park)
       for (k in idx_ride) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          cond1 <- CountData22[, rideexp_fix[k]] == i
-          cond2 <- CountData22$ovpropex == j
-          cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1478,21 +1401,16 @@ for (i in 1:4) {
       for (k in idx_flash) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          cond1 <- CountData22[, rideexp_fix[k]] == i
-          cond2 <- CountData22$ovpropex == j
-          cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1504,21 +1422,16 @@ for (i in 1:4) {
       for (k in idx_show) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          cond1 <- CountData22[, rideexp_fix[k]] == i
-          cond2 <- CountData22$ovpropex == j
-          cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
@@ -1530,30 +1443,39 @@ for (i in 1:4) {
       for (k in idx_play) {
         if (!is.na(rideexp_fix[k])) {
           colname2 <- paste0(sub("^[^_]+_[^_]+_", "", rideexp_fix[k]), "3")
-          cond1 <- CountData22[, rideexp_fix[k]] == i
-          cond2 <- CountData22$ovpropex == j
-          cond3 <- CountData22$park == park
-          cond4 <- SurveyData22$fiscal_quarter == FQ
-          rows <- which(cond1 & cond2 & cond3 & cond4)
-          value2 <- 1 * as.numeric(cond1 & cond2 & cond3 & cond4)[rows]
-          if (length(rows) > 0 && length(value2) == length(rows)) {
-            CountData22[rows, colname2] <- value2
+          rows <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == i)]
+          if (length(rows) > 0) {
+            CountData22[rows, colname2] <- 1
           }
           # --- "Can't ride" logic ---
-          rows_j <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == j & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_j <- idx_pj[which(CountData22[idx_pj, rideexp_fix[k]] == -1)]
           if (length(rows_j) > 0) {
             CountData22[rows_j, colname2] <- -1 * CountData22[rows_j, rideexp_fix[k]]
           }
-          rows_5 <- which(CountData22[, rideexp_fix[k]] == -1 & CountData22$ovpropex == 5 & CountData22$park == park & CountData22$fiscal_quarter == FQ)
+          rows_5 <- idx_p5[which(CountData22[idx_p5, rideexp_fix[k]] == -1)]
           if (length(rows_5) > 0) {
             CountData22[rows_5, colname2] <- 1 * CountData22[rows_5, rideexp_fix[k]]
           }
         }
       }
     }
-    print(c(i, j))
+    if (verbose) print(c(i, j))
   }
 }
+
+# ---- Block 7: fast aggregation of runs/against (original) ----
+dto <- as.data.table(CountData22)
+skeleton_o <- unique(dto[, .(Park = park, LifeStage = newgroup, QTR = fiscal_quarter)])
+
+Ride_OriginalRuns20 <- agg_by_base(dto, ride_bases, "2", skeleton_o, ride_bases)
+Ride_OriginalAgainst20 <- agg_by_base(dto, ride_bases, "3", skeleton_o, ride_bases)
+Show_OriginalRuns20 <- agg_by_category(dto, show_map, "2", skeleton_o, show_names)
+Show_OriginalAgainst20 <- agg_by_category(dto, show_map, "3", skeleton_o, show_names)
+Play_OriginalRuns20 <- agg_by_category(dto, play_map, "2", skeleton_o, play_names)
+Play_OriginalAgainst20 <- agg_by_category(dto, play_map, "3", skeleton_o, play_names)
+# ---- end block 7 (original) ----
+
+if (FALSE) {
 
 jorja<-c()
 for(ii in 1:length(metadata[,2])){
@@ -2105,6 +2027,8 @@ Play_OriginalAgainstx[Play_OriginalAgainstx$Park!=4,-c(1:3)]<-0
 Play_OriginalAgainst20<-data.frame(Play_OriginalAgainst20,Play_OriginalAgainstx1)
 
 }
+
+}
 ############################################################################################
 # END OF WEIGHTING NOW WE HAVE TO COMBINE EVERYTHING TO MAKE THE STATISTIC
 # From CountData we have "Original_RS","Original_RA" (i could have named these better but RS is runs scored RA is runs against)
@@ -2194,8 +2118,6 @@ names(wRAA_Table)[length(names(wRAA_Table))]<-"wOBA_Park"
 #Scaling it to the park
     wRAA_Table<-data.frame(wRAA_Table,wOBA_Scale = wRAA_Table$wOBA_Park/wRAA_Table$OBP)
 
-        EARS <- dkuReadDataset("EARS_Taxonomy")
-
 join_keys <- c("NAME", "Park", "Genre", "QTR", "LifeStage")
 # Remove duplicate columns from table2 except join keys
 table2_nodup <- EARS[, setdiff(names(EARS), setdiff(names(wRAA_Table), join_keys))]
@@ -2213,7 +2135,7 @@ EARSx<-EARSFinal_Final
 EARSx$EARS<- EARSx$wRAA/ EARSx$RPW
 
 EARSx$EARS<-    (EARSx$EARS+EARSx$replacement)*EARSx$p
-    print(unique(EARSx$QTR))
+    if (verbose) print(unique(EARSx$QTR))
 EARSTotal<-rbind(EARSTotal,EARSx)
     
 #EARSTotal<-sqldf('select a.*, b.EARS as Actual from EARSTotal a left join EARS b on a.NAME = b.NAME and
@@ -2223,7 +2145,6 @@ FQ<-FQ+1
    }
 
 EARS$Actual_EARS<-EARS$EARS
-library(dplyr)
 
 
 # Full join, then keep only id and var1
